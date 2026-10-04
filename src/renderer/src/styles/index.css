@@ -1,0 +1,159 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============ 主题 tokens ============ */
+/* 深色主题（默认，贴近 Codex） */
+:root {
+  --bg: #0d1117;
+  --panel: #161b22;
+  --raised: #1c2128;
+  --border: #30363d;
+  --hover: #21262d;
+  --text-primary: #e6edf3;
+  --text-secondary: #9da7b3;
+  --text-muted: #6e7681;
+  --accent: #58a6ff;
+  --accent-hover: #79b8ff;
+  --diff-add: #3fb950;
+  --diff-add-bg: rgba(63, 185, 80, 0.15);
+  --diff-del: #f85149;
+  --diff-del-bg: rgba(248, 81, 73, 0.15);
+}
+
+/* 浅色主题 */
+html.light {
+  --bg: #ffffff;
+  --panel: #f6f8fa;
+  --raised: #ffffff;
+  --border: #d0d7de;
+  --hover: #eaeef2;
+  --text-primary: #1f2328;
+  --text-secondary: #59636e;
+  --text-muted: #848d97;
+  --accent: #0969da;
+  --accent-hover: #0a7cff;
+  --diff-add: #1a7f37;
+  --diff-add-bg: rgba(26, 127, 55, 0.12);
+  --diff-del: #cf222e;
+  --diff-del-bg: rgba(207, 34, 46, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Microsoft YaHei', sans-serif;
+  background: var(--bg);
+  color: var(--text-primary);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* 允许选择的文本区域 */
+.selectable {
+  user-select: text;
+}
+
+/* ============ 跨平台标题栏拖拽区 ============ */
+/* macOS：红绿灯靠左，留出左侧空白给拖拽，右侧也需可拖拽 */
+.titlebar-drag {
+  -webkit-app-region: drag;
+}
+.titlebar-no-drag {
+  -webkit-app-region: no-drag;
+}
+/* Windows：自绘按钮区域必须 no-drag 才能点击 */
+.window-controls {
+  -webkit-app-region: no-drag;
+}
+
+/* ============ 滚动条 ============ */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ============ 代码高亮容器 ============ */
+.code-block {
+  font-family: 'SF Mono', 'JetBrains Mono', 'Cascadia Code', Menlo, Consolas,
+    monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.code-block pre {
+  margin: 0;
+  overflow-x: auto;
+}
+.code-block code {
+  font-family: inherit;
+}
+.shiki {
+  background: transparent !important;
+  padding: 0 !important;
+}
+
+/* ============ 动画 ============ */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-fade-in-up {
+  animation: fadeInUp 0.25s ease-out;
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+.typing-cursor {
+  display: inline-block;
+  width: 8px;
+  height: 16px;
+  background: var(--accent);
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: blink 1s step-end infinite;
+}
+
+/* 斜杠命令菜单高亮 */
+.command-item.active {
+  background: var(--hover);
+  border-color: var(--accent);
+}

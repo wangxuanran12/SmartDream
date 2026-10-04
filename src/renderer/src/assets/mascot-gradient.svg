@@ -1,0 +1,104 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">灵机一梦 吉祥物</title>
+  <desc id="desc">灵机一梦 AI 科技产品吉祥物：一个发光的星星精灵</desc>
+
+  <defs>
+    <linearGradient id="bodyGrad" x1="256" y1="80" x2="256" y2="420" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8B7CFF"/>
+      <stop offset="0.55" stop-color="#A78BFF"/>
+      <stop offset="1" stop-color="#F2A6E6"/>
+    </linearGradient>
+
+    <linearGradient id="sparkGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFE66D"/>
+      <stop offset="1" stop-color="#FF9A3D"/>
+    </linearGradient>
+
+    <radialGradient id="cloudGrad" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#D9C8FF" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#D9C8FF" stop-opacity="0"/>
+    </radialGradient>
+
+    <radialGradient id="glowGrad" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#B79AFF" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#B79AFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- 背景柔光 -->
+  <circle cx="256" cy="340" r="170" fill="url(#glowGrad)"/>
+
+  <!-- 梦境云雾（身后） -->
+  <g opacity="0.6">
+    <ellipse cx="150" cy="360" rx="70" ry="34" fill="url(#cloudGrad)"/>
+    <ellipse cx="362" cy="372" rx="66" ry="30" fill="url(#cloudGrad)"/>
+    <ellipse cx="256" cy="398" rx="84" ry="30" fill="url(#cloudGrad)"/>
+  </g>
+
+  <!-- 漂浮星点 -->
+  <g fill="#B79AFF">
+    <circle cx="120" cy="180" r="6"/>
+    <circle cx="396" cy="150" r="5"/>
+    <circle cx="408" cy="270" r="7"/>
+    <circle cx="98" cy="270" r="5"/>
+  </g>
+  <g fill="#FFD66B">
+    <circle cx="388" cy="112" r="6"/>
+    <circle cx="110" cy="112" r="5"/>
+  </g>
+
+  <!-- 灵感火花（头顶） -->
+  <g transform="translate(256 118)">
+    <path d="M-10 -22 C-14 -34 -2 -34 0 -22 C2 -12 -2 -8 -2 -8 C-2 -8 2 -14 -2 -24 C-6 -10 -4 -6 -4 -6 C-4 -6 -6 -10 -10 -22 Z" fill="url(#sparkGrad)" transform="rotate(-12)"/>
+    <circle cx="14" cy="-30" r="6" fill="#FFE66D"/>
+    <circle cx="-16" cy="-34" r="4" fill="#FFE66D"/>
+  </g>
+
+  <!-- 主体：星星精灵 -->
+  <g>
+    <path d="M256 96
+             L290 176
+             L378 182
+             L312 236
+             L334 320
+             L256 272
+             L178 320
+             L200 236
+             L134 182
+             L222 176
+             Z"
+          fill="url(#bodyGrad)"
+          stroke="#FFFFFF" stroke-width="6" stroke-linejoin="round"/>
+
+    <path d="M256 96 L222 176 L256 200 Z" fill="#FFFFFF" opacity="0.35"/>
+  </g>
+
+  <!-- 脸部 -->
+  <g>
+    <ellipse cx="220" cy="196" rx="20" ry="24" fill="#2B2350"/>
+    <circle cx="226" cy="188" r="8" fill="#FFFFFF"/>
+    <circle cx="214" cy="204" r="4" fill="#FFFFFF" opacity="0.8"/>
+
+    <ellipse cx="292" cy="196" rx="20" ry="24" fill="#2B2350"/>
+    <circle cx="298" cy="188" r="8" fill="#FFFFFF"/>
+    <circle cx="286" cy="204" r="4" fill="#FFFFFF" opacity="0.8"/>
+
+    <ellipse cx="192" cy="226" rx="14" ry="9" fill="#FF8FB8" opacity="0.55"/>
+    <ellipse cx="320" cy="226" rx="14" ry="9" fill="#FF8FB8" opacity="0.55"/>
+
+    <path d="M240 230 Q256 248 272 230" stroke="#2B2350" stroke-width="5" stroke-linecap="round" fill="none"/>
+  </g>
+
+  <!-- 小手 -->
+  <g fill="url(#bodyGrad)" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round">
+    <circle cx="178" cy="268" r="16"/>
+    <circle cx="334" cy="268" r="16"/>
+  </g>
+
+  <!-- 梦幻尾迹星点 -->
+  <g fill="#A78BFF">
+    <circle cx="160" cy="340" r="5" opacity="0.7"/>
+    <circle cx="352" cy="338" r="5" opacity="0.7"/>
+    <circle cx="256" cy="360" r="6" opacity="0.5"/>
+  </g>
+</svg>

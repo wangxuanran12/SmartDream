@@ -1,0 +1,13 @@
+node_modules
+dist
+out
+release
+data
+SmartDream
+.electron-cache
+.trae
+.workbuddy
+.npmrc
+*.tsbuildinfo
+*.log
+.DS_Store

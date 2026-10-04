@@ -1,0 +1,47 @@
+{
+  "name": "ai-agent-demo",
+  "version": "1.1.10",
+  "description": "AI 编程助手桌面应用 Demo（Electron + React + TypeScript），复刻 Codex / WorkBuddy 界面",
+  "main": "./out/main/index.js",
+  "author": "",
+  "license": "MIT",
+  "scripts": {
+    "postinstall": "node -e \"const p='node_modules/electron/dist/Electron.app';if(require('fs').existsSync(p)){require('child_process').execSync('xattr -dr com.apple.quarantine '+p+' 2>/dev/null || true; codesign --force --deep --sign - '+p)}\"",
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "build:mac": "electron-vite build && electron-builder --mac",
+    "build:win": "electron-vite build && electron-builder --win --x64",
+    "build:unpack": "electron-vite build && electron-builder --dir"
+  },
+  "dependencies": {
+    "@electron-toolkit/preload": "^3.0.1",
+    "@electron-toolkit/utils": "^3.0.0",
+    "lucide-react": "^0.454.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^9.0.1",
+    "remark-gfm": "^4.0.0",
+    "shiki": "^1.22.2",
+    "zustand": "^4.5.5"
+  },
+  "devDependencies": {
+    "@electron-toolkit/tsconfig": "^1.0.1",
+    "@types/node": "^24.0.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.19",
+    "electron": "^44.4.5",
+    "electron-builder": "^24.13.3",
+    "electron-vite": "^2.3.0",
+    "postcss": "^8.4.39",
+    "resedit": "^3.1.0",
+    "tailwindcss": "^3.4.6",
+    "typescript": "^5.5.2",
+    "vite": "^5.3.1"
+  }
+}

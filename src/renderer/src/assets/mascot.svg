@@ -1,0 +1,131 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="wingGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#dbe3fa"/>
+      <stop offset="1" stop-color="#f7f9ff"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" fill="#ffffff"/>
+
+  <!-- 环绕星光点缀 -->
+  <g stroke="#c9ced8" stroke-width="2.2" stroke-linecap="round" fill="none">
+    <path d="M92 140 v20 M82 150 h20"/>
+    <path d="M430 112 v16 M422 120 h16"/>
+    <path d="M72 330 v14 M65 337 h14"/>
+    <path d="M444 286 v16 M436 294 h16"/>
+    <path d="M136 470 v12 M130 476 h12"/>
+    <path d="M376 462 v12 M370 468 h12"/>
+    <circle cx="426" cy="420" r="4"/>
+  </g>
+  <!-- 新月 -->
+  <path d="M424 40 A 15 15 0 1 0 442 68 A 11.5 11.5 0 1 1 424 40 Z" fill="#eef1f8" stroke="#b9c0d0" stroke-width="1.5"/>
+
+  <!-- 倾斜轨道环 + 卫星（头部白底遮住环的后半段） -->
+  <g transform="rotate(-14 256 180)">
+    <ellipse cx="256" cy="180" rx="132" ry="38" fill="none" stroke="#9aa3b5" stroke-width="2.5"/>
+    <circle cx="388" cy="180" r="6" fill="#ffffff" stroke="#8f97a6" stroke-width="3"/>
+  </g>
+
+  <!-- 薄纱仙翼（先画，裙身白底盖住翼根） -->
+  <g id="wingL" fill="url(#wingGrad)" fill-opacity="0.95" stroke="#a9b1cb" stroke-width="3" stroke-linejoin="round">
+    <path d="M 238 314 C 202 284 160 250 128 236 C 108 228 94 244 104 264 C 122 300 178 326 236 336 Z"/>
+    <path d="M 240 352 C 208 360 180 374 162 394 C 156 402 166 410 184 404 C 210 396 234 380 250 364 Z"/>
+  </g>
+  <g fill="none" stroke="#c3c9dd" stroke-width="1.8" stroke-linecap="round">
+    <path d="M 224 312 C 190 290 160 268 136 250"/>
+    <path d="M 216 324 C 188 308 162 292 142 276"/>
+    <path d="M 236 360 C 210 368 188 380 172 394"/>
+  </g>
+  <use href="#wingL" transform="translate(512 0) scale(-1 1)"/>
+
+  <!-- 悬垂小腿 + 圆头小鞋（先画，裙摆白底盖住腿根） -->
+  <g fill="none" stroke="#a8b0bc" stroke-width="3.5" stroke-linecap="round">
+    <path d="M 240 388 C 238 408 236 422 234 436"/>
+    <path d="M 272 388 C 274 408 276 422 278 436"/>
+  </g>
+  <ellipse cx="233" cy="441" rx="7.5" ry="5" fill="#ffffff" stroke="#a8b0bc" stroke-width="3"/>
+  <ellipse cx="279" cy="441" rx="7.5" ry="5" fill="#ffffff" stroke="#a8b0bc" stroke-width="3"/>
+
+  <!-- 精灵尖耳（先画，头球白底盖住内缘） -->
+  <g fill="#ffffff" stroke="#a8b0bc" stroke-width="3.5" stroke-linejoin="round">
+    <path d="M172 232 C 146 220 126 216 114 222 C 124 246 148 260 176 266 Z"/>
+    <path d="M340 232 C 366 220 386 216 398 222 C 388 246 364 260 336 266 Z"/>
+  </g>
+
+  <!-- 星光裙摆（白底遮住翼根与腿根） -->
+  <path d="M 226 296 C 224 326 216 354 200 384 Q 212 396 228 392 Q 244 404 256 396 Q 268 404 284 392 Q 300 396 312 384 C 296 354 288 326 286 296 Z"
+        fill="#ffffff" stroke="#a8b0bc" stroke-width="3.5" stroke-linejoin="round"/>
+  <g fill="none" stroke="#ccd2db" stroke-width="2" stroke-linecap="round">
+    <path d="M 240 302 C 238 332 232 360 222 384"/>
+    <path d="M 272 302 C 274 332 280 360 290 384"/>
+    <path d="M 218 348 Q 256 360 294 348"/>
+    <path d="M 228 312 Q 256 320 284 312"/>
+  </g>
+  <!-- 胸前星饰 -->
+  <path d="M 256 318 C 257 324 258 325 264 326 C 258 327 257 328 256 334 C 255 328 254 327 248 326 C 254 325 255 324 256 318 Z"
+        fill="#f7c948" stroke="#e8b73a" stroke-width="1.5" stroke-linejoin="round"/>
+
+  <!-- 手臂：左手轻提裙摆，右手挥手施法 -->
+  <g fill="none" stroke="#a8b0bc" stroke-width="3.5" stroke-linecap="round">
+    <path d="M 230 318 C 216 328 208 342 206 356"/>
+    <path d="M 282 316 C 312 308 344 292 366 272"/>
+  </g>
+  <circle cx="205" cy="362" r="7" fill="#ffffff" stroke="#a8b0bc" stroke-width="3"/>
+  <circle cx="370" cy="266" r="7.5" fill="#ffffff" stroke="#a8b0bc" stroke-width="3"/>
+  <!-- 指尖星光 -->
+  <path d="M 396 253 C 397.2 259.6 398.4 260.8 405 262 C 398.4 263.2 397.2 264.4 396 271 C 394.8 264.4 393.6 263.2 387 262 C 393.6 260.8 394.8 259.6 396 253 Z"
+        fill="#f7c948" stroke="#e8b73a" stroke-width="1.5" stroke-linejoin="round"/>
+
+  <!-- 头部：白底球体 + 经纬网格线 -->
+  <circle cx="256" cy="216" r="92" fill="#ffffff" stroke="#a8b0bc" stroke-width="3.5"/>
+  <g fill="none" stroke="#ccd2db" stroke-width="2" stroke-linecap="round">
+    <path d="M256 124 C 220 158 220 274 256 308"/>
+    <path d="M256 124 C 292 158 292 274 256 308"/>
+    <path d="M256 124 C 176 166 176 266 256 308"/>
+    <path d="M256 124 C 336 166 336 266 256 308"/>
+    <path d="M179 266 Q 256 280 333 266"/>
+  </g>
+
+  <!-- 齐刘海发盖（白底 + 网格纹理） -->
+  <path d="M 162 218 A 98 98 0 1 1 350 218 Q 256 226 162 218 Z"
+        fill="#ffffff" stroke="#98a0ae" stroke-width="3.5" stroke-linejoin="round"/>
+  <g fill="none" stroke="#ccd2db" stroke-width="2" stroke-linecap="round">
+    <path d="M 186 150 Q 256 132 326 150"/>
+    <path d="M 218 128 C 212 152 210 176 213 202"/>
+    <path d="M 256 124 C 254 152 254 180 256 208"/>
+    <path d="M 294 128 C 300 152 302 176 299 202"/>
+  </g>
+
+  <!-- 双丸子头（画在发盖前缘之上） -->
+  <g fill="#ffffff" stroke="#98a0ae" stroke-width="3.5">
+    <circle cx="168" cy="108" r="32"/>
+    <circle cx="344" cy="108" r="32"/>
+  </g>
+  <g fill="none" stroke="#ccd2db" stroke-width="2" stroke-linecap="round">
+    <path d="M 146 98 Q 168 88 190 98"/>
+    <path d="M 148 120 Q 168 111 188 120"/>
+    <path d="M 322 98 Q 344 88 366 98"/>
+    <path d="M 324 120 Q 344 111 364 120"/>
+  </g>
+  <!-- 右丸子头星星发夹 -->
+  <path d="M 352 89 C 352.8 93.6 353.4 94.2 358 95 C 353.4 95.8 352.8 96.4 352 101 C 351.2 96.4 350.6 95.8 346 95 C 350.6 94.2 351.2 93.6 352 89 Z"
+        fill="#f7c948" stroke="#e8b73a" stroke-width="1.2" stroke-linejoin="round"/>
+
+  <!-- 头顶漂浮星光 -->
+  <path d="M 256 48 C 258 60 260 62 274 66 C 260 70 258 72 256 84 C 254 72 252 70 238 66 C 252 62 254 60 256 48 Z"
+        fill="#f7c948" stroke="#e8b73a" stroke-width="1.8" stroke-linejoin="round"/>
+
+  <!-- 表情：大眼睛 + 上翘睫毛 + 微笑 + 腮红 -->
+  <ellipse cx="218" cy="246" rx="13.5" ry="18" fill="#3f3f46"/>
+  <ellipse cx="294" cy="246" rx="13.5" ry="18" fill="#3f3f46"/>
+  <circle cx="213" cy="238" r="5" fill="#ffffff"/>
+  <circle cx="289" cy="238" r="5" fill="#ffffff"/>
+  <circle cx="223" cy="254" r="2.5" fill="#ffffff" opacity="0.8"/>
+  <circle cx="299" cy="254" r="2.5" fill="#ffffff" opacity="0.8"/>
+  <path d="M 205 230 Q 200 225 201 219" stroke="#3f3f46" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+  <path d="M 307 230 Q 312 225 311 219" stroke="#3f3f46" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+  <path d="M 248 276 Q 256 284 264 276" fill="none" stroke="#3f3f46" stroke-width="2.8" stroke-linecap="round"/>
+  <circle cx="188" cy="262" r="8" fill="#f6c6d3" opacity="0.55"/>
+  <circle cx="324" cy="262" r="8" fill="#f6c6d3" opacity="0.55"/>
+</svg>
