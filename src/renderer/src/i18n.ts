@@ -64,7 +64,7 @@ const zh: Record<string, string> = {
   legendFree: '磁盘可用',
   usedOfTotal: '已用 {0} / 共 {1}',
   defaultWorkspaceRoot: 'SmartDream 默认工作空间存储路径',
-  defaultWorkspaceRootDesc: '新建任务、工作空间时将自动存放在该路径下；修改后不影响已有数据。',
+  defaultWorkspaceRootDesc: '新建空间会存放在该路径下。自选目录仅在本次运行中授权，重启后需重新选择。',
   change: '更改',
   loading: '加载中…',
   // ---- 模型服务（通用页，真实生效） ----
@@ -320,7 +320,7 @@ const en: Record<string, string> = {
   legendFree: 'Disk free',
   usedOfTotal: 'Used {0} of {1}',
   defaultWorkspaceRoot: 'Default workspace storage path',
-  defaultWorkspaceRootDesc: 'New tasks and workspaces will be stored under this path; changes do not affect existing data.',
+  defaultWorkspaceRootDesc: 'New spaces use this path. A selected folder is authorized for this run only and must be selected again after restart.',
   change: 'Change',
   loading: 'Loading…',
   sectionModel: 'Model Service',

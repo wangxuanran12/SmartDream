@@ -68,7 +68,6 @@ function applySettings(s: DbSnapshot['settings']): void {
   if (s.uiScale === 'small' || s.uiScale === 'default' || s.uiScale === 'large') {
     patch.uiScale = s.uiScale as UiScale
   }
-  if (typeof s.workspaceRoot === 'string') patch.workspaceRoot = s.workspaceRoot
   // 模型服务配置：非空字符串才覆盖默认值
   if (typeof s.apiBaseUrl === 'string' && s.apiBaseUrl) patch.apiBaseUrl = s.apiBaseUrl
   if (typeof s.apiModel === 'string' && s.apiModel) patch.apiModel = s.apiModel
@@ -96,7 +95,7 @@ async function seedInitialSessions(api: NonNullable<Window['electronAPI']>): Pro
     const info = await api.getAppInfo()
     const wsRoot = typeof info?.workspaceRoot === 'string' ? info.workspaceRoot : ''
     if (wsRoot && typeof api.createSpace === 'function') {
-      const demoDir = await api.createSpace(DEMO_SPACE_NAME, wsRoot)
+      const demoDir = await api.createSpace(DEMO_SPACE_NAME)
       if (typeof api.writeFile === 'function') {
         await api.writeFile(`${demoDir}/${DEMO_SYNC_FILENAME}`, DEMO_SYNC_SCRIPT)
         // 空间内置脚本说明：描述 fileSync.js 的功能 / 使用 / 配置
@@ -104,7 +103,7 @@ async function seedInitialSessions(api: NonNullable<Window['electronAPI']>): Pro
       }
       sessions.push(buildDemoSpaceSession(demoDir))
       // 内置「项目说明」空间：space:create 自动播种功能/技术两份说明文档（空间同名时文档位于空间根目录）
-      const projDir = await api.createSpace(PROJECT_DOCS_SPACE_NAME, wsRoot)
+      const projDir = await api.createSpace(PROJECT_DOCS_SPACE_NAME)
       sessions.push(buildProjectDocsSpaceSession(projDir))
       // 标记内置空间已初始化：此后删除不复活（与 testDemo 行为一致）
       await api.dbSettingsUpsert({ projectSpaceSeeded: true })
@@ -154,7 +153,7 @@ async function ensureProjectDocsSpace(api: NonNullable<Window['electronAPI']>): 
       await api.dbSettingsUpsert({ projectSpaceSeeded: true })
       return
     }
-    const dir = await api.createSpace(PROJECT_DOCS_SPACE_NAME, root)
+    const dir = await api.createSpace(PROJECT_DOCS_SPACE_NAME)
     const s = buildProjectDocsSpaceSession(dir)
     useSessionStore.setState((st) => ({ sessions: [s, ...st.sessions] }))
     await api.dbSessionUpsert(toSessionPayload(s)).catch(() => {})
@@ -207,18 +206,17 @@ export async function hydrate(): Promise<void> {
   applySettings(snap.settings)
   if (snap.user) useUserStore.setState({ name: snap.user.name, plan: snap.user.plan })
 
-  // 默认工作储存路径：从未持久化过该设置时，回落为主进程提供的默认值（安装目录下 data/workspace/）
-  if (typeof snap.settings.workspaceRoot !== 'string') {
-    api
-      .getAppInfo()
-      .then((info) => {
-        // 防御：旧 preload 构建无 workspaceRoot 字段时不覆盖
-        if (typeof info.workspaceRoot === 'string') {
-          useUIStore.setState({ workspaceRoot: info.workspaceRoot })
-        }
-      })
-      .catch(() => {})
-  }
+  // 文件系统授权只在本次运行有效；启动时使用主进程默认目录，不恢复设置或历史会话中的路径。
+  api
+    .getAppInfo()
+    .then((info) => {
+      if (typeof info.workspaceRoot === 'string') {
+        useUIStore.setState({ workspaceRoot: info.workspaceRoot })
+      }
+    })
+    .catch((err) => {
+      console.warn('[SmartDream] 初始化默认工作空间路径失败:', err)
+    })
 
   // 首启播种刚管理过 projectSpaceSeeded 标记（且播种流程已建「项目说明」空间）：
   // snap.settings 是启动时的旧快照（首启必无标记），此时不能再跑兜底，否则 Windows 上

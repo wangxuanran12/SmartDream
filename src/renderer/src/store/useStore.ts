@@ -384,35 +384,35 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   renameSession: (id, title) => get().updateSession(id, { title }),
 
-  // 会话级授权：弹窗选择文件夹 → 用户确认 → 写回当前会话的 workspace
+  // 会话级授权由主进程打开系统选择器并立即登记，renderer 不提交可伪造的路径。
   authorizeSessionWorkspace: async (sessionId) => {
     if (!window.electronAPI) return null
-    const dir = await window.electronAPI.selectDirectory()
-    if (!dir) return null // 用户取消
     try {
-      await window.electronAPI.authorizeWorkspace(dir)
+      const dir = await window.electronAPI.selectAndAuthorizeDirectory()
+      if (!dir) return null // 用户取消
       get().updateSession(sessionId, { workspace: dir, authorizedFile: undefined })
       return dir
-    } catch {
+    } catch (err) {
+      console.warn('[SmartDream] 工作空间授权失败:', err)
       return null
     }
   },
 
-  // 会话级授权：弹窗选择单个文件 → 用户确认 → 写回当前会话的 authorizedFile
+  // 单文件授权也由主进程完成选择和登记，仅授予该文件的读取权限。
   authorizeSessionFile: async (sessionId) => {
     if (!window.electronAPI) return null
-    const file = await window.electronAPI.selectFile()
-    if (!file) return null // 用户取消
     try {
-      await window.electronAPI.authorizeFile(file)
-      get().updateSession(sessionId, { authorizedFile: file })
+      const file = await window.electronAPI.selectAndAuthorizeFile()
+      if (!file) return null // 用户取消
+      get().updateSession(sessionId, { workspace: undefined, authorizedFile: file })
       return file
-    } catch {
+    } catch (err) {
+      console.warn('[SmartDream] 单文件授权失败:', err)
       return null
     }
   },
 
-  // 新建空间：在默认空间存储路径下创建同名文件夹并授权，同时新建任务绑定该空间（或绑定指定会话）
+  // 空间路径由主进程管理，renderer 只提交空间名称。
   createSpace: async (name, opts) => {
     const api = window.electronAPI
     // 防御：旧 preload 构建无 createSpace 时给出可诊断的失败信息，避免静默无反应
@@ -420,9 +420,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       console.warn('[SmartDream] 新建空间失败：preload 缺少 createSpace，请完整重启 npm run dev 更新构建产物')
       return null
     }
-    const parent = useUIStore.getState().workspaceRoot || undefined
     try {
-      const dir = await api.createSpace(name, parent)
+      const dir = await api.createSpace(name)
       // 新目录下必无占位任务，createSession 直接创建并绑定该空间
       const bindId = opts?.bindSessionId ?? get().createSession({ workspace: dir })
       get().updateSession(bindId, { workspace: dir, authorizedFile: undefined })
@@ -745,7 +744,6 @@ export const useUIStore = create<UIState>((set) => ({
 
   setWorkspaceRoot: (dir) => {
     set({ workspaceRoot: dir })
-    saveUIDebounced({ workspaceRoot: dir })
   },
 
   setApiConfig: (patch) => {

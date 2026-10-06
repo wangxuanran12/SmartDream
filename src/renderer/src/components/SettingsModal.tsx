@@ -362,9 +362,13 @@ function StorageSection(): JSX.Element {
   // 更改默认工作空间路径：系统目录选择器 → 持久化
   const changeRoot = async (): Promise<void> => {
     const api = window.electronAPI
-    if (!api || typeof api.selectDirectory !== 'function') return
-    const dir = await api.selectDirectory()
-    if (dir) setWorkspaceRoot(dir)
+    if (!api || typeof api.selectWorkspaceRoot !== 'function') return
+    try {
+      const dir = await api.selectWorkspaceRoot()
+      if (dir) setWorkspaceRoot(dir)
+    } catch (err) {
+      console.warn('[SmartDream] 设置默认工作空间失败:', err)
+    }
   }
 
   return (
