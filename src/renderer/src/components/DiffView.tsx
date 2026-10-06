@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { diffLines } from '../lib/diff'
 import type { DiffResult } from '../types'
+import { useT } from '../i18n'
 
 /**
  * Codex 风格内联 diff 视图：红删绿增，行号并排显示。
@@ -14,6 +15,7 @@ export default function DiffView({
   newText: string
   filename?: string
 }): JSX.Element {
+  const t = useT()
   const diff: DiffResult = useMemo(() => diffLines(oldText, newText), [oldText, newText])
 
   return (
@@ -29,47 +31,64 @@ export default function DiffView({
 
       {/* diff 内容 */}
       <div className="code-block selectable overflow-x-auto py-1 text-[12.5px] leading-6">
-        {diff.lines.map((line, idx) => {
-          if (line.type === 'add') {
-            return (
-              <div
-                key={idx}
-                className="flex bg-[var(--diff-add-bg)]"
-                style={{ minWidth: 'max-content' }}
-              >
-                <span className="w-10 shrink-0 select-none border-r border-surface-border bg-[rgba(63,185,80,0.25)] text-right pr-2 text-text-muted">
-                  {line.newLine}
-                </span>
-                <span className="w-4 shrink-0 select-none text-center text-[var(--diff-add)]">+</span>
-                <span className="whitespace-pre px-2 text-text-primary">{line.content}</span>
+        {diff.truncated ? (
+          <div role="status" className="px-3 py-2 text-text-muted">
+            {t('diffLimitExceeded')}
+          </div>
+        ) : (
+          <>
+            {diff.newlineChanged && (
+              <div role="status" className="px-3 py-1 text-text-muted">
+                {t('diffFinalNewlineChanged')}
               </div>
-            )
-          }
-          if (line.type === 'del') {
-            return (
-              <div
-                key={idx}
-                className="flex bg-[var(--diff-del-bg)]"
-                style={{ minWidth: 'max-content' }}
-              >
-                <span className="w-10 shrink-0 select-none border-r border-surface-border bg-[rgba(248,81,73,0.25)] text-right pr-2 text-text-muted">
-                  {line.oldLine}
-                </span>
-                <span className="w-4 shrink-0 select-none text-center text-[var(--diff-del)]">-</span>
-                <span className="whitespace-pre px-2 text-text-primary">{line.content}</span>
-              </div>
-            )
-          }
-          return (
-            <div key={idx} className="flex" style={{ minWidth: 'max-content' }}>
-              <span className="w-10 shrink-0 select-none border-r border-surface-border text-right pr-2 text-text-muted">
-                {line.oldLine}
-              </span>
-              <span className="w-4 shrink-0" />
-              <span className="whitespace-pre px-2 text-text-secondary">{line.content}</span>
-            </div>
-          )
-        })}
+            )}
+            {diff.lines.map((line, idx) => {
+              if (line.type === 'add') {
+                return (
+                  <div
+                    key={idx}
+                    className="flex bg-[var(--diff-add-bg)]"
+                    style={{ minWidth: 'max-content' }}
+                  >
+                    <span className="w-10 shrink-0 select-none border-r border-surface-border bg-[rgba(63,185,80,0.25)] text-right pr-2 text-text-muted">
+                      {line.newLine}
+                    </span>
+                    <span className="w-4 shrink-0 select-none text-center text-[var(--diff-add)]">
+                      +
+                    </span>
+                    <span className="whitespace-pre px-2 text-text-primary">{line.content}</span>
+                  </div>
+                )
+              }
+              if (line.type === 'del') {
+                return (
+                  <div
+                    key={idx}
+                    className="flex bg-[var(--diff-del-bg)]"
+                    style={{ minWidth: 'max-content' }}
+                  >
+                    <span className="w-10 shrink-0 select-none border-r border-surface-border bg-[rgba(248,81,73,0.25)] text-right pr-2 text-text-muted">
+                      {line.oldLine}
+                    </span>
+                    <span className="w-4 shrink-0 select-none text-center text-[var(--diff-del)]">
+                      -
+                    </span>
+                    <span className="whitespace-pre px-2 text-text-primary">{line.content}</span>
+                  </div>
+                )
+              }
+              return (
+                <div key={idx} className="flex" style={{ minWidth: 'max-content' }}>
+                  <span className="w-10 shrink-0 select-none border-r border-surface-border text-right pr-2 text-text-muted">
+                    {line.oldLine}
+                  </span>
+                  <span className="w-4 shrink-0" />
+                  <span className="whitespace-pre px-2 text-text-secondary">{line.content}</span>
+                </div>
+              )
+            })}
+          </>
+        )}
       </div>
     </div>
   )

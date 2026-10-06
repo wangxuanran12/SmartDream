@@ -13,6 +13,7 @@ import CodeBlock from './CodeBlock'
 import FileTree from './FileTree'
 import RailButton from './RailButton'
 import { useSessionStore, useUIStore, type PreviewTab } from '../store/useStore'
+import { useShallow } from 'zustand/react/shallow'
 import { MOCK_FILE_CONTENT, MODELS, MOCK_PROJECT_FILES } from '../data/mockData'
 import type { FileContent, FileNode } from '@shared/types'
 import { translate, useT } from '../i18n'
@@ -26,25 +27,38 @@ export default function PreviewPanel(): JSX.Element {
   const t = useT()
   const {
     previewFile,
-    setPreviewFile,
-    sessions,
     activeId,
-    authorizeSessionWorkspace,
-    authorizeSessionFile
-  } = useSessionStore()
-  const activeSession = sessions.find((s) => s.id === activeId)
-  const running = activeSession?.status === 'running'
-  const model = MODELS.find((m) => m.id === activeSession?.model)
+    hasActiveSession,
+    running,
+    modelId,
+    workspaceDir,
+    authorizedFile,
+    messageCount
+  } = useSessionStore(
+    useShallow((state) => {
+      const session = state.sessions.find((item) => item.id === state.activeId)
+      return {
+        previewFile: state.previewFile,
+        activeId: state.activeId,
+        hasActiveSession: !!session,
+        running: session?.status === 'running',
+        modelId: session?.model,
+        workspaceDir: session?.workspace ?? null,
+        authorizedFile: session?.authorizedFile ?? null,
+        messageCount: session?.messages.length ?? 0
+      }
+    })
+  )
+  const setPreviewFile = useSessionStore((state) => state.setPreviewFile)
+  const authorizeSessionWorkspace = useSessionStore((state) => state.authorizeSessionWorkspace)
+  const authorizeSessionFile = useSessionStore((state) => state.authorizeSessionFile)
+  const model = MODELS.find((item) => item.id === modelId)
   const { previewTab, setPreviewTab, theme, setPreviewVisible } = useUIStore()
   const [fileContent, setFileContent] = useState<FileContent | null>(null)
   const [loading, setLoading] = useState(false)
   const [readError, setReadError] = useState<string | null>(null)
   const [fileTreeError, setFileTreeError] = useState<string | null>(null)
   const [directoryTruncated, setDirectoryTruncated] = useState(false)
-
-  // 当前会话的授权状态（会话级，切换会话即切换文件）
-  const workspaceDir = activeSession?.workspace ?? null
-  const authorizedFile = activeSession?.authorizedFile ?? null
 
   // 文件树：默认不打开任何目录，需用户授权工作空间后才加载
   const [fileRoot, setFileRoot] = useState<FileNode | null>(null)
@@ -164,8 +178,8 @@ export default function PreviewPanel(): JSX.Element {
 
   // 用户点击「选择文件夹」授权
   const handleAuthorizeFolder = async (): Promise<void> => {
-    if (authorizing || !activeSession) return
-    const sessionId = activeSession.id
+    if (authorizing || !hasActiveSession) return
+    const sessionId = activeId
     setAuthorizing(true)
     try {
       const directory = await authorizeSessionWorkspace(sessionId)
@@ -180,8 +194,8 @@ export default function PreviewPanel(): JSX.Element {
 
   // 用户点击「选择文件」授权
   const handleAuthorizeFile = async (): Promise<void> => {
-    if (authorizing || !activeSession) return
-    const sessionId = activeSession.id
+    if (authorizing || !hasActiveSession) return
+    const sessionId = activeId
     setAuthorizing(true)
     try {
       const file = await authorizeSessionFile(sessionId)
@@ -198,7 +212,7 @@ export default function PreviewPanel(): JSX.Element {
     <div className="mt-3 flex flex-wrap items-center gap-2">
       <button
         onClick={handleAuthorizeFolder}
-        disabled={authorizing || !activeSession}
+        disabled={authorizing || !hasActiveSession}
         className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
       >
         <FolderOpen size={14} />
@@ -206,7 +220,7 @@ export default function PreviewPanel(): JSX.Element {
       </button>
       <button
         onClick={handleAuthorizeFile}
-        disabled={authorizing || !activeSession}
+        disabled={authorizing || !hasActiveSession}
         className="flex items-center gap-1.5 rounded-md border border-surface-border px-3 py-1.5 text-[13px] font-medium text-text-secondary transition-colors hover:border-accent hover:text-text-primary disabled:opacity-50"
       >
         <FileCode2 size={14} />
@@ -402,7 +416,7 @@ export default function PreviewPanel(): JSX.Element {
       <div className="flex h-6 shrink-0 items-center justify-between border-t border-surface-border px-4 text-[10px] text-text-muted">
         <span className="flex shrink-0 items-center gap-1">
           <MessageSquare size={10} />
-          {t('previewMessageCount', String(activeSession?.messages.length ?? 0))}
+          {t('previewMessageCount', String(messageCount))}
         </span>
         <div className="flex shrink-0 items-center gap-3">
           <span className="flex items-center gap-1">

@@ -11,6 +11,7 @@ import { FilePlus2, PanelRight, X } from 'lucide-react'
 import { useUIStore, genAttachmentId } from './store/useStore'
 import { useT } from './i18n'
 import { hydrate } from './lib/persistence'
+import { resizeWidth } from './lib/layout'
 import RailButton from './components/RailButton'
 
 /** 拖拽文件上限（对齐 WorkBuddy：最多 50 个） */
@@ -18,7 +19,6 @@ const MAX_DROP_FILES = 50
 
 export default function App(): JSX.Element {
   const {
-    sidebarWidth,
     previewWidth,
     setSidebarWidth,
     setPreviewWidth,
@@ -130,7 +130,9 @@ export default function App(): JSX.Element {
           {/* 侧边栏拖拽条（折叠时隐藏） */}
           {!sidebarCollapsed && (
             <Resizer
-              onResize={(d) => setSidebarWidth(Math.max(180, Math.min(420, sidebarWidth + d)))}
+              onResize={(d) =>
+                setSidebarWidth(resizeWidth(useUIStore.getState().sidebarWidth, d, 1, 180, 420))
+              }
             />
           )}
 
@@ -141,7 +143,9 @@ export default function App(): JSX.Element {
           {previewVisible ? (
             <>
               <Resizer
-                onResize={(d) => setPreviewWidth(Math.max(280, Math.min(700, previewWidth - d)))}
+                onResize={(d) =>
+                  setPreviewWidth(resizeWidth(useUIStore.getState().previewWidth, d, -1, 280, 700))
+                }
               />
               <div style={{ width: previewWidth }} className="min-w-0">
                 <PreviewPanel />

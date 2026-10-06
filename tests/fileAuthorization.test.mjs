@@ -42,6 +42,13 @@ test('path boundaries handle filesystem roots and similarly prefixed siblings', 
   assert.equal(isWithinPath(project, join(root, 'work', 'project-copy')), false)
 })
 
+test('Windows path samples preserve root boundaries independent of the test host', () => {
+  const root = String.raw`C:\work\project`
+  assert.equal(isWithinPath(root, String.raw`C:\work\project\src`, 'win32'), true)
+  assert.equal(isWithinPath(root, String.raw`C:\work\project-copy\secret.txt`, 'win32'), false)
+  assert.equal(isWithinPath(root, String.raw`C:\work\project\..\secret.txt`, 'win32'), false)
+})
+
 test('a selected file grants reads only for that exact file', async (t) => {
   const fixture = await createFixture(t)
   const file = join(fixture.authorized, 'selected.txt')

@@ -32,7 +32,7 @@ import {
   ChevronRight
 } from 'lucide-react'
 import { useSessionStore, useUIStore, useUserStore, isValidSpaceName } from '../store/useStore'
-import type { Session } from '../types'
+import { selectSessionSummaries, type SessionSummary } from '../store/selectors'
 import { useT } from '../i18n'
 import type { I18nKey } from '../i18n'
 import type { ReactNode } from 'react'
@@ -67,7 +67,7 @@ function SessionRow({
   onSelect,
   onDelete
 }: {
-  session: Session
+  session: SessionSummary
   active: boolean
   indent?: boolean
   onSelect: () => void
@@ -174,8 +174,12 @@ function UserMenuItem({
 }
 
 export default function Sidebar(): JSX.Element {
-  const { sessions, activeId, createSession, deleteSession, setActive, createSpace } =
-    useSessionStore()
+  const sessions = useSessionStore(selectSessionSummaries)
+  const activeId = useSessionStore((s) => s.activeId)
+  const createSession = useSessionStore((s) => s.createSession)
+  const deleteSession = useSessionStore((s) => s.deleteSession)
+  const setActive = useSessionStore((s) => s.setActive)
+  const createSpace = useSessionStore((s) => s.createSpace)
   const {
     sidebarCollapsed,
     toggleSidebar,
@@ -254,10 +258,10 @@ export default function Sidebar(): JSX.Element {
 
   // 点击空间：默认打开该空间的文件模块 —— 激活空间内绑定任务（当前任务已属于该空间则保持不变），
   // 右侧预览面板切到「文件」页签并展开
-  const handleOpenSpace = (spaceSessions: Session[]): void => {
+  const handleOpenSpace = (spaceSessions: SessionSummary[]): void => {
     const target =
       spaceSessions.find((s) => s.id === activeId) ??
-      spaceSessions.find((s) => s.messages.length > 0) ??
+      spaceSessions.find((s) => s.hasMessages) ??
       spaceSessions[0]
     if (target && target.id !== activeId) setActive(target.id)
     setPreviewTab('files')
@@ -268,7 +272,7 @@ export default function Sidebar(): JSX.Element {
   const looseSessions = useMemo(
     () =>
       sessions
-        .filter((s) => !s.workspace && s.messages.length > 0)
+        .filter((s) => !s.workspace && s.hasMessages)
         .sort((a, b) => b.updatedAt - a.updatedAt),
     [sessions]
   )
@@ -276,7 +280,7 @@ export default function Sidebar(): JSX.Element {
   // 空间分组：按授权工作空间目录分组，组内按更新时间倒序，组间按最近更新倒序
   // （占位任务参与分组但不渲染，保证仅含占位任务的新空间仍显示为目录）
   const spaceGroups = useMemo(() => {
-    const map = new Map<string, Session[]>()
+    const map = new Map<string, SessionSummary[]>()
     for (const s of sessions) {
       if (!s.workspace) continue
       const list = map.get(s.workspace) ?? []
@@ -429,7 +433,7 @@ export default function Sidebar(): JSX.Element {
           {spacesOpen &&
             spaceGroups.map((g) => {
               const closed = closedFolders[g.dir]
-              const visible = g.sessions.filter((s) => s.messages.length > 0)
+              const visible = g.sessions.filter((s) => s.hasMessages)
               return (
                 <div key={g.dir}>
                   <div

@@ -23,6 +23,7 @@ import {
   applyUiScale
 } from '../store/useStore'
 import type { PermissionMode, PreviewTab, AppLang, UiScale } from '../store/useStore'
+import { initializeOnce } from './initializeOnce'
 
 function toMessage(p: MessagePayload): Message {
   let meta: Partial<Message> = {}
@@ -167,7 +168,7 @@ async function ensureProjectDocsSpace(api: NonNullable<Window['electronAPI']>): 
  * 应用启动时调用一次：加载 SQLite 快照并还原状态。
  * 无 Electron 环境（纯浏览器）或加载失败时直接返回，UI 使用默认内存态。
  */
-export async function hydrate(): Promise<void> {
+async function hydrateOnce(): Promise<void> {
   const api = window.electronAPI
   if (!api) return
 
@@ -226,3 +227,5 @@ export async function hydrate(): Promise<void> {
     await ensureProjectDocsSpace(api)
   }
 }
+
+export const hydrate = initializeOnce(hydrateOnce)

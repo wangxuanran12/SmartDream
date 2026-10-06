@@ -1,4 +1,5 @@
 import { useRef, useState, useEffect } from 'react'
+import { pointerDelta } from '../lib/layout'
 
 /**
  * 可拖拽分割条：调整左右面板宽度。
@@ -6,7 +7,7 @@ import { useRef, useState, useEffect } from 'react'
  */
 export default function Resizer({ onResize }: { onResize: (delta: number) => void }): JSX.Element {
   const [dragging, setDragging] = useState(false)
-  const startX = useRef(0)
+  const lastX = useRef(0)
   const onResizeRef = useRef(onResize)
   const draggingRef = useRef(dragging)
   onResizeRef.current = onResize
@@ -15,7 +16,9 @@ export default function Resizer({ onResize }: { onResize: (delta: number) => voi
   useEffect(() => {
     const onMouseMove = (e: MouseEvent): void => {
       if (!draggingRef.current) return
-      onResizeRef.current(e.clientX - startX.current)
+      const delta = pointerDelta(lastX.current, e.clientX)
+      lastX.current = e.clientX
+      if (delta !== 0) onResizeRef.current(delta)
     }
     const onMouseUp = (): void => {
       draggingRef.current = false
@@ -34,7 +37,7 @@ export default function Resizer({ onResize }: { onResize: (delta: number) => voi
   const onMouseDown = (e: React.MouseEvent): void => {
     setDragging(true)
     draggingRef.current = true
-    startX.current = e.clientX
+    lastX.current = e.clientX
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
   }

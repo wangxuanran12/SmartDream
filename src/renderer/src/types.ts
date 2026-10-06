@@ -74,6 +74,8 @@ export interface DiffResult {
   lines: DiffLine[]
   additions: number
   deletions: number
+  newlineChanged: boolean
+  truncated: boolean
 }
 
 export interface SlashCommand {

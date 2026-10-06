@@ -1,11 +1,17 @@
 import { realpath, stat } from 'node:fs/promises'
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 
 export type FileAccessMode = 'read' | 'write'
 
-export function isWithinPath(base: string, target: string): boolean {
-  const rel = relative(base, target)
-  return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`))
+export function isWithinPath(
+  base: string,
+  target: string,
+  pathFlavor: 'native' | 'win32' = 'native'
+): boolean {
+  const rel = pathFlavor === 'win32' ? win32.relative(base, target) : relative(base, target)
+  const absolute = pathFlavor === 'win32' ? win32.isAbsolute(rel) : isAbsolute(rel)
+  const separator = pathFlavor === 'win32' ? win32.sep : sep
+  return rel === '' || (!absolute && rel !== '..' && !rel.startsWith(`..${separator}`))
 }
 
 export async function canonicalizePath(input: unknown, allowMissing = false): Promise<string> {
