@@ -11,6 +11,11 @@ export interface FileNode {
   children?: FileNode[]
 }
 
+export interface DirectoryReadResult {
+  entries: FileNode[]
+  truncated: boolean
+}
+
 export interface FileContent {
   path: string
   content: string
@@ -136,6 +141,8 @@ export interface UserPayload {
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant'
   content: string
+  /** Local paths are resolved by the main process and never forwarded to the model. */
+  fileAttachments?: Array<{ name: string; path: string }>
 }
 
 /** renderer → main 的流式聊天请求载荷 */
@@ -154,6 +161,7 @@ export interface ChatStreamResult {
   /** 失败原因摘要（ok=false 时存在；用户主动中止时 aborted=true） */
   error?: string
   aborted?: boolean
+  failureType?: 'attachment'
 }
 
 /** db:load 返回的完整快照：任务 + 各任务消息 + 设置 + 用户档案 */
@@ -175,7 +183,7 @@ export interface ElectronAPI {
   getAppInfo: () => Promise<AppInfo>
   /** 查询应用存储信息（缓存目录 + 占用 + 磁盘容量），设置弹窗「存储」区使用 */
   getStorageInfo: () => Promise<StorageInfo>
-  readDirectory: (dirPath: string) => Promise<FileNode[]>
+  readDirectory: (dirPath: string) => Promise<DirectoryReadResult>
   readFile: (filePath: string) => Promise<FileContent>
   /** 读取文件为 data URL（用于图片等二进制预览），仅限已授权路径 */
   readFileAsDataUrl: (filePath: string) => Promise<{ path: string; dataUrl: string }>
@@ -202,7 +210,7 @@ export interface ElectronAPI {
   onMaximizeChange: (cb: (isMax: boolean) => void) => () => void
   /** 设置渲染进程缩放系数（浏览器级缩放，F-44 字体大小档位用；等价 Ctrl+/-） */
   setZoomFactor: (factor: number) => void
-  // ---- 持久化（SQLite，主进程单写者；DB 不可用时调用方静默降级） ----
+  // ---- 持久化（SQLite，主进程单写者；写入失败由渲染层提示用户） ----
   /** 启动加载全量快照（任务 + 消息 + 设置 + 用户档案） */
   dbLoad: () => Promise<DbSnapshot>
   /** 新增或更新任务（不含消息） */

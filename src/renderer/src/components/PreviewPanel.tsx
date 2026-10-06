@@ -15,7 +15,7 @@ import RailButton from './RailButton'
 import { useSessionStore, useUIStore, type PreviewTab } from '../store/useStore'
 import { MOCK_FILE_CONTENT, MODELS, MOCK_PROJECT_FILES } from '../data/mockData'
 import type { FileContent, FileNode } from '@shared/types'
-import { useT } from '../i18n'
+import { translate, useT } from '../i18n'
 
 const TABS: { id: PreviewTab; label: string; icon: JSX.Element }[] = [
   { id: 'files', label: 'previewTabFiles', icon: <Files size={14} /> },
@@ -38,6 +38,9 @@ export default function PreviewPanel(): JSX.Element {
   const { previewTab, setPreviewTab, theme, setPreviewVisible } = useUIStore()
   const [fileContent, setFileContent] = useState<FileContent | null>(null)
   const [loading, setLoading] = useState(false)
+  const [readError, setReadError] = useState<string | null>(null)
+  const [fileTreeError, setFileTreeError] = useState<string | null>(null)
+  const [directoryTruncated, setDirectoryTruncated] = useState(false)
 
   // 当前会话的授权状态（会话级，切换会话即切换文件）
   const workspaceDir = activeSession?.workspace ?? null
@@ -47,31 +50,47 @@ export default function PreviewPanel(): JSX.Element {
   const [fileRoot, setFileRoot] = useState<FileNode | null>(null)
   // 授权中状态
   const [authorizing, setAuthorizing] = useState(false)
+  const [authorizationRevision, setAuthorizationRevision] = useState(0)
 
   // 根据授权目录加载文件树
   useEffect(() => {
     if (!workspaceDir) {
       setFileRoot(null)
+      setFileTreeError(null)
+      setDirectoryTruncated(false)
       return
     }
     setFileRoot(null)
+    setFileTreeError(null)
+    setDirectoryTruncated(false)
     if (!window.electronAPI) {
       // 无 Electron（纯浏览器预览）时用 mock 文件树兜底
       setFileRoot(MOCK_PROJECT_FILES as unknown as FileNode)
       return
     }
+    let active = true
     window.electronAPI
       .readDirectory(workspaceDir)
-      .then((children) => {
+      .then(({ entries, truncated }) => {
+        if (!active) return
+        setDirectoryTruncated(truncated)
         setFileRoot({
           name: workspaceDir.split(/[\\/]/).pop() || workspaceDir,
           path: workspaceDir,
           isDirectory: true,
-          children
+          children: entries
         })
       })
-      .catch(() => setFileRoot(null))
-  }, [workspaceDir])
+      .catch((error: unknown) => {
+        if (!active) return
+        console.error('[SmartDream] 文件树读取失败:', error)
+        setFileTreeError(error instanceof Error ? error.message : String(error))
+        setFileRoot(null)
+      })
+    return () => {
+      active = false
+    }
+  }, [workspaceDir, authorizationRevision])
 
   // 授权单个文件时（未授权目录），文件树展示为「单文件树」，便于在「文件」Tab 中看到该文件
   useEffect(() => {
@@ -84,12 +103,19 @@ export default function PreviewPanel(): JSX.Element {
     }
 
     setFileRoot(null)
+    setFileTreeError(null)
+    setDirectoryTruncated(false)
     let active = true
     window.electronAPI
       .getWorkspace()
       .then(({ authorizedFiles }) => {
         if (!active || !authorizedFiles.includes(authorizedFile)) {
-          if (active) setFileRoot(null)
+          if (active) {
+            setFileRoot(null)
+            setFileTreeError(
+              translate(useUIStore.getState().lang, 'previewAuthorizationError')
+            )
+          }
           return
         }
         const name = authorizedFile.split(/[\\/]/).pop() || authorizedFile
@@ -98,12 +124,17 @@ export default function PreviewPanel(): JSX.Element {
       })
       .catch((err) => {
         console.warn('[SmartDream] 查询文件授权状态失败:', err)
-        if (active) setFileRoot(null)
+        if (active) {
+          setFileRoot(null)
+          setFileTreeError(
+            translate(useUIStore.getState().lang, 'previewAuthorizationError')
+          )
+        }
       })
     return () => {
       active = false
     }
-  }, [workspaceDir, authorizedFile])
+  }, [workspaceDir, authorizedFile, authorizationRevision])
 
   // 授权单个文件时，直接打开该文件代码
   useEffect(() => {
@@ -132,46 +163,91 @@ export default function PreviewPanel(): JSX.Element {
   }, [activeId, workspaceDir, authorizedFile, previewFile, setPreviewFile])
 
   // 用户点击「选择文件夹」授权
-  const handleAuthorizeFolder = (): void => {
+  const handleAuthorizeFolder = async (): Promise<void> => {
     if (authorizing || !activeSession) return
+    const sessionId = activeSession.id
     setAuthorizing(true)
-    authorizeSessionWorkspace(activeSession.id)
-      .catch(() => {})
-      .finally(() => setAuthorizing(false))
+    try {
+      const directory = await authorizeSessionWorkspace(sessionId)
+      if (!directory || useSessionStore.getState().activeId !== sessionId) return
+      setPreviewFile(null)
+      setPreviewTab('files')
+      setAuthorizationRevision((revision) => revision + 1)
+    } finally {
+      setAuthorizing(false)
+    }
   }
 
   // 用户点击「选择文件」授权
-  const handleAuthorizeFile = (): void => {
+  const handleAuthorizeFile = async (): Promise<void> => {
     if (authorizing || !activeSession) return
+    const sessionId = activeSession.id
     setAuthorizing(true)
-    authorizeSessionFile(activeSession.id)
-      .catch(() => {})
-      .finally(() => setAuthorizing(false))
+    try {
+      const file = await authorizeSessionFile(sessionId)
+      if (!file || useSessionStore.getState().activeId !== sessionId) return
+      setPreviewFile(file)
+      setPreviewTab('code')
+      setAuthorizationRevision((revision) => revision + 1)
+    } finally {
+      setAuthorizing(false)
+    }
   }
+
+  const authorizationActions = (
+    <div className="mt-3 flex flex-wrap items-center gap-2">
+      <button
+        onClick={handleAuthorizeFolder}
+        disabled={authorizing || !activeSession}
+        className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
+      >
+        <FolderOpen size={14} />
+        {authorizing ? t('previewProcessing') : t('previewReauthorizeFolder')}
+      </button>
+      <button
+        onClick={handleAuthorizeFile}
+        disabled={authorizing || !activeSession}
+        className="flex items-center gap-1.5 rounded-md border border-surface-border px-3 py-1.5 text-[13px] font-medium text-text-secondary transition-colors hover:border-accent hover:text-text-primary disabled:opacity-50"
+      >
+        <FileCode2 size={14} />
+        {t('previewReauthorizeFile')}
+      </button>
+    </div>
+  )
 
   // 读取文件内容：优先真实磁盘（Electron），否则 mock；依赖 activeId 保证切换任务时重新读取（刷新磁盘最新内容）
   useEffect(() => {
     if (!previewFile) {
       setFileContent(null)
+      setReadError(null)
+      setLoading(false)
       return
     }
+    let active = true
     setLoading(true)
+    setReadError(null)
     const mockContent = MOCK_FILE_CONTENT[previewFile.replace(/^.*\/(src|utils)\//, 'src/')]
-    if (window.electronAPI && !previewFile.startsWith('/Users/demo')) {
+    if (window.electronAPI) {
       window.electronAPI
         .readFile(previewFile)
-        .then(setFileContent)
-        .catch(() => {
-          setFileContent(
-            mockContent
-              ? { path: previewFile, content: mockContent, language: 'tsx' }
-              : { path: previewFile, content: t('previewReadError'), language: 'ts' }
-          )
+        .then((content) => {
+          if (!active) return
+          setFileContent(content)
+          setReadError(null)
         })
-        .finally(() => setLoading(false))
+        .catch((error: unknown) => {
+          if (!active) return
+          console.error('[SmartDream] 文件预览读取失败:', error)
+          setFileContent(null)
+          setReadError(error instanceof Error ? error.message : String(error))
+        })
+        .finally(() => {
+          if (active) setLoading(false)
+        })
     } else {
       // mock 场景
       setTimeout(() => {
+        if (!active) return
         setFileContent({
           path: previewFile,
           content: mockContent ?? t('previewMockContent'),
@@ -180,7 +256,10 @@ export default function PreviewPanel(): JSX.Element {
         setLoading(false)
       }, 120)
     }
-  }, [previewFile, activeId])
+    return () => {
+      active = false
+    }
+  }, [previewFile, activeId, authorizationRevision])
 
   return (
     <div className="flex h-full min-w-0 flex-col border-l border-surface-border bg-surface-panel">
@@ -229,11 +308,20 @@ export default function PreviewPanel(): JSX.Element {
                       <ExternalLink size={13} />
                     </button>
                   </div>
-                  <CodeBlock
-                    code={fileContent?.content ?? ''}
-                    language={fileContent?.language ?? 'text'}
-                    theme={theme}
-                  />
+                  {readError ? (
+                    <div>
+                      <div role="alert" className="rounded-md border border-red-500/30 bg-red-500/10 p-3 text-[12px] text-red-300">
+                        {t('previewReadError')}: {readError}
+                      </div>
+                      {authorizationActions}
+                    </div>
+                  ) : (
+                    <CodeBlock
+                      code={fileContent?.content ?? ''}
+                      language={fileContent?.language ?? 'text'}
+                      theme={theme}
+                    />
+                  )}
                 </div>
               )
             ) : (
@@ -247,8 +335,21 @@ export default function PreviewPanel(): JSX.Element {
 
         {previewTab === 'files' && (
           <div>
-            {fileRoot ? (
-              fileRoot.isDirectory ? (
+            {fileTreeError ? (
+              <div>
+                <div role="alert" className="rounded-md border border-red-500/30 bg-red-500/10 p-3 text-[12px] text-red-300">
+                  {t('previewTreeError')}: {fileTreeError}
+                </div>
+                {authorizationActions}
+              </div>
+            ) : fileRoot ? (
+              <>
+                {directoryTruncated && (
+                  <div role="status" className="mb-2 rounded-md bg-amber-500/10 p-2 text-[11px] text-amber-300">
+                    {t('previewTreeTruncated')}
+                  </div>
+                )}
+                {fileRoot.isDirectory ? (
                 <FileTree
                   root={fileRoot}
                   selectedPath={previewFile}
@@ -281,7 +382,8 @@ export default function PreviewPanel(): JSX.Element {
                     <span className="truncate">{fileRoot.name}</span>
                   </div>
                 </div>
-              )
+                )}
+              </>
             ) : (
               <div className="flex h-64 flex-col items-center justify-center text-center text-text-muted">
                 <FolderOpen size={32} className="mb-3 text-text-secondary" />
@@ -289,24 +391,7 @@ export default function PreviewPanel(): JSX.Element {
                 <div className="mt-1 max-w-[260px] text-[12px] leading-5">
                   {t('previewAuthDesc')}
                 </div>
-                <div className="mt-4 flex items-center gap-2">
-                  <button
-                    onClick={handleAuthorizeFolder}
-                    disabled={authorizing}
-                    className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
-                  >
-                    <FolderOpen size={14} />
-                    {authorizing ? t('previewProcessing') : t('previewChooseFolder')}
-                  </button>
-                  <button
-                    onClick={handleAuthorizeFile}
-                    disabled={authorizing}
-                    className="flex items-center gap-1.5 rounded-md border border-surface-border px-3 py-1.5 text-[13px] font-medium text-text-secondary transition-colors hover:border-accent hover:text-text-primary disabled:opacity-50"
-                  >
-                    <FileCode2 size={14} />
-                    {t('previewChooseFile')}
-                  </button>
-                </div>
+                {authorizationActions}
               </div>
             )}
           </div>

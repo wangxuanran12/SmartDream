@@ -1,16 +1,9 @@
-// LLM 流式聊天转发：主进程 fetch OpenAI 兼容 /chat/completions（stream:true），
-// 解析 SSE 逐 delta 回调 onChunk，由 index.ts 经 webContents.send 推给 renderer。
-// 仅转发不落库（消息持久化由 renderer 在流结束后整条写入 SQLite）。
-import type { ChatStreamPayload, ChatStreamResult } from '../shared/types'
+import type { ChatMessage, ChatStreamPayload, ChatStreamResult } from '../shared/types'
 
-/** 首包与 chunk 间空闲超时（毫秒） */
 const FIRST_CHUNK_TIMEOUT = 30_000
 const IDLE_TIMEOUT = 30_000
-
-/** 活跃请求表：requestId → AbortController（chat:abort 按此定位） */
 const inflight = new Map<string, AbortController>()
 
-/** 中止指定请求（用户取消 / 切换会话 / 新发送覆盖旧流） */
 export function abortChat(requestId: string): void {
   inflight.get(requestId)?.abort()
 }
@@ -21,95 +14,137 @@ interface RunChatStreamArgs {
   onChunk: (delta: string) => void
 }
 
-/** 发起流式请求并消费 SSE 流，结束时 resolve 结果 */
-export async function runChatStream({ payload, apiKey, onChunk }: RunChatStreamArgs): Promise<ChatStreamResult> {
+function consumeEvent(event: string, onChunk: (delta: string) => void): {
+  done: boolean
+  error?: string
+} {
+  const data = event
+    .split('\n')
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice(5).replace(/^ /, ''))
+    .join('\n')
+  if (!data) return { done: false }
+  if (data.trim() === '[DONE]') return { done: true }
+
+  let json: { choices?: Array<{ delta?: { content?: string } }> }
+  try {
+    json = JSON.parse(data) as { choices?: Array<{ delta?: { content?: string } }> }
+  } catch {
+    return { done: false, error: '响应流包含无效的 SSE 数据' }
+  }
+  const delta = json.choices?.[0]?.delta?.content
+  if (typeof delta === 'string' && delta) onChunk(delta)
+  return { done: false }
+}
+
+function normalizeLineEndings(buffer: string, final = false): string {
+  const normalized = buffer.replace(/\r\n/g, '\n')
+  return final ? normalized.replace(/\r/g, '\n') : normalized.replace(/\r(?!$)/g, '\n')
+}
+
+export async function runChatStream({
+  payload,
+  apiKey,
+  onChunk
+}: RunChatStreamArgs): Promise<ChatStreamResult> {
   const { requestId, messages, baseUrl, model } = payload
+  if (inflight.has(requestId)) return { ok: false, error: '请求 ID 已在使用' }
+
   const controller = new AbortController()
   inflight.set(requestId, controller)
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let timeoutReason = ''
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
 
-  // 两级超时：首包 30s；每收到一个 chunk 重置的 30s 空闲计时器
-  let idleTimer: ReturnType<typeof setTimeout> | null = null
   const armTimer = (ms: number, reason: string): void => {
-    if (idleTimer) clearTimeout(idleTimer)
-    idleTimer = setTimeout(() => {
+    if (timer) clearTimeout(timer)
+    timer = setTimeout(() => {
       timeoutReason = reason
       controller.abort()
     }, ms)
   }
-  let timeoutReason = ''
 
   try {
+    armTimer(FIRST_CHUNK_TIMEOUT, '首包超时（连接或等待首段响应超过 30 秒）')
     const res = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`
       },
-      body: JSON.stringify({ model, messages, stream: true }),
+      body: JSON.stringify({
+        model,
+        messages: messages.map(({ role, content }): ChatMessage => ({ role, content })),
+        stream: true
+      }),
       signal: controller.signal
     })
-    armTimer(FIRST_CHUNK_TIMEOUT, '首包超时')
 
     if (!res.ok || !res.body) {
+      if (res.ok && !res.body) return { ok: false, error: '模型响应缺少响应体' }
       let detail = ''
       try {
         detail = (await res.text()).slice(0, 300)
-      } catch {
-        // 读错误体失败不阻塞归因
+      } catch (error) {
+        if (controller.signal.aborted) {
+          return {
+            ok: false,
+            error: timeoutReason || '已中止',
+            aborted: !timeoutReason
+          }
+        }
+        console.warn('[SmartDream] 读取模型错误响应失败:', error)
       }
       const hint = res.status === 401 ? 'API Key 无效或未授权' : `HTTP ${res.status}`
       return { ok: false, error: detail ? `${hint}：${detail}` : hint }
     }
 
-    // 消费 SSE：Web ReadableStream + TextDecoder，按空行切事件，半包滞留 buffer
-    const reader = res.body.getReader()
+    reader = res.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
-    let got = false
+    let gotContent = false
 
     for (;;) {
       const { done, value } = await reader.read()
       if (done) break
-      armTimer(IDLE_TIMEOUT, '响应超时（30s 无新内容）')
+      if (!value?.length) continue
+      armTimer(IDLE_TIMEOUT, '响应超时（30 秒无新流数据）')
       buffer += decoder.decode(value, { stream: true })
-      buffer = buffer.replace(/\r\n/g, '\n')
+      buffer = normalizeLineEndings(buffer)
 
-      // SSE 事件以空行分隔；最后一段可能是不完整事件，留在 buffer
       const events = buffer.split('\n\n')
       buffer = events.pop() ?? ''
       for (const event of events) {
-        for (const line of event.split('\n')) {
-          if (!line.startsWith('data:')) continue
-          const data = line.slice(5).trim()
-          if (!data) continue
-          if (data === '[DONE]') {
-            // 提前中止请求释放底层连接，避免流结束后 socket 悬挂到空闲超时
-            controller.abort()
-            return { ok: true }
-          }
-          try {
-            const json = JSON.parse(data) as {
-              choices?: Array<{ delta?: { content?: string } }>
-            }
-            const delta = json.choices?.[0]?.delta?.content
-            if (delta) {
-              got = true
-              onChunk(delta)
-            }
-          } catch {
-            // 心跳/非 JSON 行忽略
-          }
-        }
+        const result = consumeEvent(event, (delta) => {
+          gotContent = true
+          onChunk(delta)
+        })
+        if (result.error) return { ok: false, error: result.error }
+        if (result.done) return { ok: true }
       }
     }
-    return { ok: got }
+
+    buffer += decoder.decode()
+    buffer = normalizeLineEndings(buffer, true)
+    if (buffer.trim()) {
+      return { ok: false, error: '响应流在 SSE 事件结束前关闭' }
+    }
+    return {
+      ok: false,
+      error: gotContent ? '响应流意外结束（缺少 [DONE]）' : '响应流意外结束（未收到 [DONE]）'
+    }
   } catch (err) {
     if (controller.signal.aborted) {
       return { ok: false, error: timeoutReason || '已中止', aborted: !timeoutReason }
     }
     return { ok: false, error: (err as Error).message }
   } finally {
-    if (idleTimer) clearTimeout(idleTimer)
-    inflight.delete(requestId)
+    if (timer) clearTimeout(timer)
+    if (reader) {
+      void reader.cancel().catch((error: unknown) => {
+        console.warn('[SmartDream] 关闭模型响应流失败:', error)
+      })
+    }
+    if (inflight.get(requestId) === controller) inflight.delete(requestId)
   }
 }

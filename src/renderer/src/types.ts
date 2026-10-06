@@ -17,6 +17,10 @@ export interface Message {
   content: string
   /** 附件/上下文文件（可选） */
   attachments?: string[]
+  /** 文本粘贴 Chip 的原文，作为请求上下文使用 */
+  textAttachments?: string[]
+  /** 文件附件的显示名与本地路径；主进程授权读取后才会并入请求 */
+  fileAttachments?: Array<{ name: string; path: string }>
   /** 发送该消息时的工作模式 */
   mode?: TaskMode
   /** 是否是流式输出中 */

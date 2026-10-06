@@ -7,7 +7,7 @@ import Resizer from './components/Resizer'
 import Login from './components/Login'
 import SettingsModal from './components/SettingsModal'
 import SearchModal from './components/SearchModal'
-import { FilePlus2, PanelRight } from 'lucide-react'
+import { FilePlus2, PanelRight, X } from 'lucide-react'
 import { useUIStore, genAttachmentId } from './store/useStore'
 import { useT } from './i18n'
 import { hydrate } from './lib/persistence'
@@ -36,6 +36,8 @@ export default function App(): JSX.Element {
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen)
   // 全局搜索弹窗（F-47）
   const searchOpen = useUIStore((s) => s.searchOpen)
+  const persistenceError = useUIStore((s) => s.persistenceError)
+  const dismissPersistenceError = useUIStore((s) => s.dismissPersistenceError)
 
   // 全局拖拽：页面任意位置松开即可添加文件
   const [dragging, setDragging] = useState(false)
@@ -104,6 +106,21 @@ export default function App(): JSX.Element {
       onDrop={handleDrop}
     >
       <TitleBar />
+      {persistenceError && (
+        <div
+          role="alert"
+          className="flex items-center justify-between gap-3 border-b border-red-500/30 bg-red-500/10 px-4 py-2 text-[12px] text-red-200"
+        >
+          <span>{t('persistenceSaveError')}</span>
+          <button
+            aria-label={t('dismissError')}
+            onClick={dismissPersistenceError}
+            className="rounded p-1 hover:bg-red-500/20"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
 
       {loggedIn ? (
         <div className="flex min-h-0 flex-1">

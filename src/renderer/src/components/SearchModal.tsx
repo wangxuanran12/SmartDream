@@ -99,6 +99,7 @@ export default function SearchModal(): JSX.Element {
   const [query, setQuery] = useState('')
   const [tab, setTab] = useState<SearchTab>('all')
   const [files, setFiles] = useState<FileNode[] | null>(null) // null = 扫描中
+  const [fileScanTruncated, setFileScanTruncated] = useState(false)
   const [selIdx, setSelIdx] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const itemRefs = useRef<(HTMLDivElement | null)[]>([])
@@ -116,6 +117,7 @@ export default function SearchModal(): JSX.Element {
     const api = window.electronAPI
     if (!api || typeof api.readDirectory !== 'function') {
       setFiles([])
+      setFileScanTruncated(false)
       return
     }
     const dirs = new Set<string>()
@@ -123,14 +125,21 @@ export default function SearchModal(): JSX.Element {
     for (const s of sessions) if (s.workspace) dirs.add(s.workspace)
     void (async () => {
       const map = new Map<string, FileNode>()
+      let truncated = false
       for (const dir of dirs) {
         try {
-          flattenFiles(await api.readDirectory(dir), map)
-        } catch {
+          const result = await api.readDirectory(dir)
+          flattenFiles(result.entries, map)
+          truncated ||= result.truncated
+        } catch (error) {
           // 未授权 / 不可读的目录跳过
+          console.warn('[SmartDream] 搜索目录读取失败:', error)
         }
       }
-      if (!cancelled) setFiles([...map.values()])
+      if (!cancelled) {
+        setFiles([...map.values()])
+        setFileScanTruncated(truncated)
+      }
     })()
     return () => {
       cancelled = true
@@ -403,6 +412,11 @@ export default function SearchModal(): JSX.Element {
 
         {/* 结果区 */}
         <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1">
+          {fileScanTruncated && (
+            <div role="status" className="mb-2 rounded-md bg-amber-500/10 p-2 text-[11px] text-amber-300">
+              {t('previewTreeTruncated')}
+            </div>
+          )}
           {!hasQuery ? (
             <div className="flex h-40 items-center justify-center text-[13px] text-text-muted">
               {t('searchEmptyHint')}
