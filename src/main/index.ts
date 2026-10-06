@@ -2,14 +2,22 @@ import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join } from 'path'
 import type { Dirent } from 'node:fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
-import { readdir, readFile, stat, writeFile, mkdir, statfs } from 'fs/promises'
+import { readdir, stat, writeFile, mkdir, statfs } from 'fs/promises'
 import { mkdirSync } from 'node:fs'
 import { basename, extname, join as pathJoin, resolve, dirname as dirnameOf } from 'path'
-import { IPC, type FileNode, type WorkspaceInfo, type ChatStreamPayload } from '../shared/types'
+import {
+  IPC,
+  type WorkspaceInfo,
+  type ChatStreamPayload
+} from '../shared/types'
+import { MAX_CHAT_ATTACHMENT_BYTES, MAX_CHAT_ATTACHMENTS_TOTAL_BYTES } from '../shared/chatLimits'
 import { initDb, closeDb, registerDbHandlers } from './db'
 import { runChatStream, abortChat } from './llm'
 import { seedProjectDocs, PROJECT_DOCS_DIRNAME } from './spaceDocs'
 import { FileAuthorization, canonicalizePath, isWithinPath } from './fileAuthorization'
+import { buildFileTree } from './fileTree'
+import { resolveChatAttachments } from './chatAttachments'
+import { readFileBounded } from './fileIO'
 import {
   clearApiKey,
   getApiKey,
@@ -67,6 +75,24 @@ function langFromPath(p: string): string {
   return EXT_LANG[extname(p).toLowerCase()] ?? 'plaintext'
 }
 
+function safeFileReadReason(err: unknown): string {
+  const errorMessage = err instanceof Error ? err.message : ''
+  const errorCode =
+    typeof err === 'object' && err !== null && 'code' in err && typeof err.code === 'string'
+      ? err.code
+      : undefined
+  if (
+    errorMessage &&
+    /^(拒绝访问|目标不是|文件过大|无效的文件系统路径)/.test(errorMessage)
+  ) {
+    return errorMessage
+  }
+  if (errorCode === 'ENOENT') return '文件或目录不存在或已移动'
+  if (errorCode === 'EACCES' || errorCode === 'EPERM') return '没有读取权限'
+  if (errorCode === 'ELOOP') return '路径无法安全解析'
+  return '系统读取失败'
+}
+
 // 常见扩展名 → MIME 类型（图片预览用）
 const MIME_BY_EXT: Record<string, string> = {
   '.png': 'image/png',
@@ -80,60 +106,7 @@ const MIME_BY_EXT: Record<string, string> = {
   '.avif': 'image/avif'
 }
 
-// 忽略的目录/文件（文件树展示时过滤）
-const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', 'out', 'release', '.idea', '.vscode'])
-const IGNORE_FILES = new Set(['.DS_Store', 'Thumbs.db'])
 const MAX_IPC_FILE_BYTES = 10 * 1024 * 1024
-
-async function buildFileTree(dirPath: string, depth = 0): Promise<FileNode[]> {
-  if (depth > 6) return [] // 防止深目录递归爆炸
-  let entries
-  try {
-    entries = await readdir(dirPath, { withFileTypes: true })
-  } catch {
-    return []
-  }
-
-  const nodes: FileNode[] = []
-  for (const entry of entries) {
-    if (entry.name.startsWith('.')) continue
-    if (entry.isSymbolicLink()) continue
-    if (!entry.isDirectory() && !entry.isFile()) continue
-    if (entry.isDirectory() && IGNORE_DIRS.has(entry.name)) continue
-    if (!entry.isDirectory() && IGNORE_FILES.has(entry.name)) continue
-
-    const fullPath = pathJoin(dirPath, entry.name)
-    if (entry.isDirectory()) {
-      nodes.push({
-        name: entry.name,
-        path: fullPath,
-        isDirectory: true,
-        children: await buildFileTree(fullPath, depth + 1)
-      })
-    } else {
-      // 文件大小（搜索弹窗「产物」结果展示用），stat 失败不阻塞列举
-      let size: number | undefined
-      try {
-        size = (await stat(fullPath)).size
-      } catch {
-        // 保留 undefined
-      }
-      nodes.push({
-        name: entry.name,
-        path: fullPath,
-        isDirectory: false,
-        extension: extname(entry.name).slice(1).toLowerCase(),
-        ...(size !== undefined ? { size } : {})
-      })
-    }
-  }
-
-  // 目录在前，文件在后，各自按字母排序
-  return nodes.sort((a, b) => {
-    if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
-    return a.name.localeCompare(b.name)
-  })
-}
 
 // ---- 文件访问授权模型（授权仅限本次运行；每次授权均由主进程系统对话框发起）----
 let sandboxDir = ''
@@ -357,7 +330,7 @@ function registerIpcHandlers(): void {
       const info = await stat(canonical)
       if (!info.isFile()) throw new Error('目标不是普通文件')
       if (info.size > MAX_IPC_FILE_BYTES) throw new Error('文件过大，无法通过预览读取')
-      const content = await readFile(canonical, 'utf-8')
+      const content = (await readFileBounded(canonical, MAX_IPC_FILE_BYTES)).toString('utf8')
       return {
         path: canonical,
         content,
@@ -365,7 +338,7 @@ function registerIpcHandlers(): void {
       }
     } catch (err) {
       throw new Error(
-        `无法读取文件: ${typeof filePath === 'string' ? basename(filePath) : '无效路径'} - ${(err as Error).message}`
+        `无法读取文件: ${typeof filePath === 'string' ? basename(filePath) : '无效路径'} - ${safeFileReadReason(err)}`
       )
     }
   })
@@ -377,13 +350,13 @@ function registerIpcHandlers(): void {
       const info = await stat(canonical)
       if (!info.isFile()) throw new Error('目标不是普通文件')
       if (info.size > MAX_IPC_FILE_BYTES) throw new Error('文件过大，无法通过预览读取')
-      const buf = await readFile(canonical)
+      const buf = await readFileBounded(canonical, MAX_IPC_FILE_BYTES)
       const mime = MIME_BY_EXT[extname(canonical).toLowerCase()] ?? 'application/octet-stream'
       const dataUrl = `data:${mime};base64,${buf.toString('base64')}`
       return { path: canonical, dataUrl }
     } catch (err) {
       throw new Error(
-        `无法读取文件: ${typeof filePath === 'string' ? basename(filePath) : '无效路径'} - ${(err as Error).message}`
+        `无法读取文件: ${typeof filePath === 'string' ? basename(filePath) : '无效路径'} - ${safeFileReadReason(err)}`
       )
     }
   })
@@ -468,11 +441,18 @@ function registerIpcHandlers(): void {
   })
 
   // 流式聊天转发：LLM SSE 逐 delta 经 sender 推回 renderer；sender 销毁时中止请求
-  ipcMain.handle(IPC.chatSend, (e, payload: ChatStreamPayload) => {
+  ipcMain.handle(IPC.chatSend, async (e, payload: ChatStreamPayload) => {
     if (
       !payload ||
       typeof payload.requestId !== 'string' ||
       !Array.isArray(payload.messages) ||
+      !payload.messages.length ||
+      payload.messages.some(
+        (message) =>
+          !message ||
+          !['system', 'user', 'assistant'].includes(message.role) ||
+          typeof message.content !== 'string'
+      ) ||
       typeof payload.model !== 'string' ||
       typeof payload.baseUrl !== 'string'
     ) {
@@ -489,9 +469,22 @@ function registerIpcHandlers(): void {
     } catch (err) {
       return { ok: false, error: (err as Error).message }
     }
+
+    const attachments = await resolveChatAttachments(
+      payload.messages,
+      (path) => fileAuthorization.resolveAuthorizedPath(path, 'read'),
+      langFromPath,
+      {
+        maxFileBytes: MAX_CHAT_ATTACHMENT_BYTES,
+        maxTotalBytes: MAX_CHAT_ATTACHMENTS_TOTAL_BYTES
+      },
+      readFileBounded
+    )
+    if (!attachments.ok) return attachments.result
+
     const sender = e.sender
     return runChatStream({
-      payload: { ...payload, baseUrl },
+      payload: { ...payload, baseUrl, messages: attachments.messages },
       apiKey,
       onChunk: (delta) => {
         if (!sender.isDestroyed()) sender.send(IPC.chatOnChunk, payload.requestId, delta)

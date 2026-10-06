@@ -144,15 +144,30 @@ export default function CommandBar({ sessionId }: { sessionId: string }): JSX.El
   const handleSend = (): void => {
     const text = input.trim()
     if (!text || session?.status === 'running') return
-    // 文件附件发送磁盘路径，Chip 附件发送粘贴原文（长文本作为上下文送达模型）
+    if (text === '/clear') {
+      useSessionStore.getState().clearMessages(sessionId)
+      setInput('')
+      clearPendingAttachments()
+      setShowCommands(false)
+      autoResize()
+      return
+    }
     const attachments = pendingAttachments.map((a) =>
-      a.kind === 'file' ? a.path || a.name : (a.preview ?? a.name)
+      a.kind === 'file' ? a.name : (a.preview ?? a.name)
     )
+    const fileAttachments = pendingAttachments
+      .filter((a) => a.kind === 'file')
+      .map((a) => ({ name: a.name, path: a.path ?? '' }))
+    const textAttachments = pendingAttachments
+      .filter((a) => a.kind === 'chip')
+      .map((a) => a.preview ?? a.name)
     const userMsg: Message = {
       id: `u_${Date.now()}`,
       role: 'user',
       content: text,
       attachments: attachments.length ? attachments : undefined,
+      fileAttachments: fileAttachments.length ? fileAttachments : undefined,
+      textAttachments: textAttachments.length ? textAttachments : undefined,
       mode
     }
     useSessionStore.getState().addMessage(sessionId, userMsg)

@@ -2,8 +2,6 @@ import { useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import CodeBlock from './CodeBlock'
-import DiffView from './DiffView'
-import { MOCK_FILE_CONTENT } from '../data/mockData'
 
 interface MarkdownProps {
   content: string
@@ -32,13 +30,6 @@ export default function Markdown({ content, theme, streaming }: MarkdownProps): 
               {children}
             </code>
           )
-        }
-
-        // diff 语言块 → 渲染内联 diff
-        if (lang === 'diff' || lang === 'diff-tsx' || lang === 'diff-ts') {
-          const oldText = MOCK_FILE_CONTENT['src/components/Counter.tsx'] ?? ''
-          const newText = MOCK_FILE_CONTENT['src/components/Counter.fixed.tsx'] ?? oldText
-          return <DiffView oldText={oldText} newText={newText} filename="Counter.tsx" />
         }
 
         return <CodeBlock code={code} language={lang} theme={theme} plain={streaming} />
