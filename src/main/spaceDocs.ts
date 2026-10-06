@@ -59,7 +59,7 @@ const FEATURE_DOC = `# SmartDream 项目功能说明
 
 - 侧边栏「任务」分组展示全部任务，执行中任务带绿色脉冲状态点，支持多任务并行与随时切换；
 - 新建任务一键创建（默认 Agent 模式），首条用户消息自动截取前 24 字符作为标题，支持手动重命名、删除（删除后自动切换相邻任务）；
-- 任务与消息经 SQLite 持久化：重启恢复任务列表、消息记录、设置与工作空间授权；空库首启自动播种示例任务；DB 损坏自动备份重建，极端情况降级内存态不阻塞使用。
+- 任务与消息经 SQLite 持久化：重启恢复任务列表、消息记录、设置和最近工作空间路径；本地文件授权不跨重启恢复；空库首启自动播种示例任务；DB 损坏自动备份重建，极端情况降级内存态不阻塞使用。
 
 ### 4. 对话与消息
 
@@ -82,9 +82,10 @@ const FEATURE_DOC = `# SmartDream 项目功能说明
 
 ### 7. 工作空间与空间管理
 
-- 授权模型：应用默认不读取任何本地文件；用户通过目录选择器显式选定目录 = 授权该目录可读可写，主进程 IPC 层强制白名单校验；
-- 「空间」= 默认空间存储路径下的同名文件夹；侧边栏「空间」分组与 + 菜单均可新建空间（内联命名，主进程校验非法字符 / 长度 / 保留名），创建后自动授权并绑定任务；
-- 项目说明由内置的「项目说明」空间承载（功能说明 / 技术说明两份 Markdown 文档，即本空间根目录下的文件）；普通新建空间不再生成「项目说明」文件夹；支持多空间并存，授权目录集合重启后从任务持久化全量恢复。
+- 授权模型：主进程直接打开系统选择器并登记授权；目录授权可读写，单文件授权仅可读，真实路径校验阻止符号链接逃逸；
+- 授权仅在本次运行有效，重启后不会从会话记录恢复；历史路径可用于显示，再次访问前需重新授权；
+- 「空间」= 主进程管理的空间存储根目录下的同名文件夹；侧边栏「空间」分组与 + 菜单均可新建空间（内联命名，主进程校验非法字符 / 长度），创建后绑定任务；自选空间根目录需通过系统选择器授权且仅在本次运行中生效；
+- 项目说明由内置的「项目说明」空间承载（功能说明 / 技术说明两份 Markdown 文档，即本空间根目录下的文件）；普通新建空间不再生成「项目说明」文件夹；支持多空间并存。
 
 ### 8. 权限管理
 
@@ -118,7 +119,7 @@ const FEATURE_DOC = `# SmartDream 项目功能说明
 
 - 用户菜单「设置」或 ⌘,/Ctrl+, 打开；左侧分组导航 + 右侧内容页，非「通用」页为占位；
 - 通用页真实生效项：语言（简体中文 / English，弹窗文案实时切换并持久化）、字体大小三档、字体缩放；
-- 「存储」区展示真实数据：系统缓存目录路径与占用统计、磁盘总 / 剩余容量、默认工作空间存储路径（可更改并持久化）；
+- 「存储」区展示真实数据：系统缓存目录路径与占用统计、磁盘总 / 剩余容量、默认工作空间存储路径；自选目录仅在本次运行中授权，重启后需重新选择；
 - 「模型服务」卡片配置 API Key / 接口地址 / 模型名。
 
 ### 14. 全局搜索
@@ -190,20 +191,20 @@ src/
 |---|---|
 | 应用信息 | app:get-info、app:get-storage |
 | 文件系统 | fs:read-directory、fs:read-file、fs:read-file-data-url、fs:write-file、fs:create-file |
-| 工作空间 | fs:get-workspace、fs:authorize-workspace、fs:authorize-file、space:create |
-| 系统选择器 | dialog:select-directory、dialog:select-file |
+| 工作空间 | fs:get-workspace、dialog:select-authorized-directory、dialog:select-authorized-file、dialog:select-workspace-root、space:create |
 | Shell | shell:open-path、shell:show-in-folder |
 | 窗口控制 | window:minimize / maximize / close / is-maximized、window:on-maximize-change |
 | 持久化 | db:load、db:session-upsert、db:session-delete、db:message-upsert、db:messages-replace、db:settings-upsert、db:user-upsert |
 | 聊天流 | chat:send、chat:on-chunk、chat:abort |
 
 - 渲染层对所有可选 IPC 方法先做 typeof 函数防御再调用，避免新旧 preload 构建不一致导致整树崩溃；
-- 文件类 IPC 在主进程做路径白名单强制校验（isPathAllowed：授权目录集合 / 授权文件 / 沙箱工作区），越权直接拒绝，渲染层无法绕过。
+- 文件授权由主进程打开系统选择器并在同一操作中登记；目录授权可读写，单文件授权只读，权限不会从任务记录跨重启恢复；
+- 文件类 IPC 在主进程解析真实路径并用路径相对关系检查授权边界，拒绝符号链接逃逸、相似前缀路径和超出大小上限的文件；空间根目录由主进程管理，IPC 不接受 renderer 传入的父路径。
 
 ## 五、数据持久化（SQLite）
 
 - 驱动：Node 内置 node:sqlite（Electron 44 内置 Node 24，同步 API），**零原生模块依赖**——macOS 本机即可直接打出 Windows 全功能安装包；
-- DB 文件：存储根目录（安装目录下 SmartDream/，dev 为项目根 SmartDream/）workbuddy.db，4 张表：tasks / messages / app_settings（KV）/ users；
+- DB 文件：存储根目录（安装目录下 SmartDream/，dev 为项目根 SmartDream/）workbuddy.db，5 张表：tasks / messages / app_settings（KV）/ secure_credentials / users；
 - 主进程单写者 + WAL 模式 + user_version 迁移位；手动 BEGIN/COMMIT 包装事务；DB 损坏自动备份重建，失败降级纯内存态；
 - 流式回复只在流结束整条落库（不逐字写）；重启时 running 状态归一 idle；空库首启幂等播种示例任务；
 - 渲染层经 IPC fire-and-forget 访问，不直接接触 DB。
@@ -218,9 +219,9 @@ src/
 
 ## 七、安全模型
 
-- 渲染进程 contextIsolation 开启、nodeIntegration 关闭；主进程仅经 preload contextBridge 暴露白名单 API；
-- 文件 / 目录读写一律过主进程路径白名单校验；外链 window.open 一律交系统浏览器；
-- API Key 仅存本地 app_settings，经主进程转发请求，不经第三方。
+- 渲染进程 sandbox、contextIsolation 开启、nodeIntegration 关闭；主进程仅经 preload contextBridge 暴露白名单 API；
+- 文件 / 目录读写一律过主进程真实路径白名单校验；外链只允许 HTTP/HTTPS 并交系统浏览器；
+- API Key 由主进程安全凭据服务持有并转发请求，不返回 renderer，也不作为普通 app_settings 持久化。
 
 ## 八、构建与打包
 

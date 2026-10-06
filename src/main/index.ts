@@ -4,11 +4,12 @@ import type { Dirent } from 'node:fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { readdir, readFile, stat, writeFile, mkdir, statfs } from 'fs/promises'
 import { mkdirSync } from 'node:fs'
-import { basename, extname, join as pathJoin, resolve, isAbsolute, sep, dirname as dirnameOf } from 'path'
+import { basename, extname, join as pathJoin, resolve, dirname as dirnameOf } from 'path'
 import { IPC, type FileNode, type WorkspaceInfo, type ChatStreamPayload } from '../shared/types'
-import { initDb, closeDb, registerDbHandlers, getAllSessions, isDbReady } from './db'
+import { initDb, closeDb, registerDbHandlers } from './db'
 import { runChatStream, abortChat } from './llm'
 import { seedProjectDocs, PROJECT_DOCS_DIRNAME } from './spaceDocs'
+import { FileAuthorization, canonicalizePath, isWithinPath } from './fileAuthorization'
 import {
   clearApiKey,
   getApiKey,
@@ -82,6 +83,7 @@ const MIME_BY_EXT: Record<string, string> = {
 // 忽略的目录/文件（文件树展示时过滤）
 const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', 'out', 'release', '.idea', '.vscode'])
 const IGNORE_FILES = new Set(['.DS_Store', 'Thumbs.db'])
+const MAX_IPC_FILE_BYTES = 10 * 1024 * 1024
 
 async function buildFileTree(dirPath: string, depth = 0): Promise<FileNode[]> {
   if (depth > 6) return [] // 防止深目录递归爆炸
@@ -95,6 +97,8 @@ async function buildFileTree(dirPath: string, depth = 0): Promise<FileNode[]> {
   const nodes: FileNode[] = []
   for (const entry of entries) {
     if (entry.name.startsWith('.')) continue
+    if (entry.isSymbolicLink()) continue
+    if (!entry.isDirectory() && !entry.isFile()) continue
     if (entry.isDirectory() && IGNORE_DIRS.has(entry.name)) continue
     if (!entry.isDirectory() && IGNORE_FILES.has(entry.name)) continue
 
@@ -131,40 +135,10 @@ async function buildFileTree(dirPath: string, depth = 0): Promise<FileNode[]> {
   })
 }
 
-// ---- 文件访问授权模型（对齐 WorkBuddy：默认不开放，需用户显式授权）----
-// 应用沙箱工作区：位于应用数据目录（打包部署位置）下，始终可写，
-// 用于用户未授权本地目录时创建/保存新文件。
+// ---- 文件访问授权模型（授权仅限本次运行；每次授权均由主进程系统对话框发起）----
 let sandboxDir = ''
-
-// 已授权的工作空间目录集合（用户显式授权后加入，支持多个空间并存）。
-// 只有这些目录及其子路径可被 readDirectory / readFile / writeFile 访问。
-const authorizedDirs = new Set<string>()
-
-// 已授权的单个文件集合（用户显式选择文件后加入，允许读取该文件本身）
-const authorizedFiles = new Set<string>()
-
-/** 规范化路径：统一分隔符、去掉尾部斜杠 */
-function normalizePath(p: string): string {
-  return resolve(p).replace(/[\\/]+$/, '')
-}
-
-/** 判断 target 是否位于 base 目录之内（含 base 本身） */
-function isWithin(base: string, target: string): boolean {
-  const b = normalizePath(base)
-  const t = normalizePath(target)
-  if (t === b) return true
-  return t.startsWith(b + sep)
-}
-
-/** 判断路径是否允许访问（已授权工作空间、已授权文件或沙箱工作区） */
-function isPathAllowed(target: string): boolean {
-  for (const dir of authorizedDirs) {
-    if (isWithin(dir, target)) return true
-  }
-  if (authorizedFiles.has(normalizePath(target))) return true
-  if (sandboxDir && isWithin(sandboxDir, target)) return true
-  return false
-}
+const fileAuthorization = new FileAuthorization()
+let workspaceRoot = ''
 
 /** 确保沙箱工作区目录存在 */
 async function ensureSandboxDir(): Promise<void> {
@@ -173,7 +147,11 @@ async function ensureSandboxDir(): Promise<void> {
 
 /** 返回当前授权状态 */
 function currentWorkspace(): WorkspaceInfo {
-  return { sandboxDir, authorizedDirs: [...authorizedDirs] }
+  return {
+    sandboxDir,
+    authorizedDirs: fileAuthorization.getAuthorizedDirs(),
+    authorizedFiles: fileAuthorization.getAuthorizedFiles()
+  }
 }
 
 function createWindow(): void {
@@ -193,7 +171,7 @@ function createWindow(): void {
     trafficLightPosition: isMac ? { x: 16, y: 18 } : undefined,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false,
+      sandbox: true,
       contextIsolation: true,
       nodeIntegration: false
     }
@@ -211,8 +189,34 @@ function createWindow(): void {
   }
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    try {
+      const url = new URL(details.url)
+      if (
+        (url.protocol === 'http:' || url.protocol === 'https:') &&
+        !url.username &&
+        !url.password
+      ) {
+        void shell.openExternal(url.href).catch((err) => {
+          console.warn('[SmartDream] 无法打开外部链接:', err)
+        })
+      }
+    } catch {
+      // Reject malformed and non-web URLs.
+    }
     return { action: 'deny' }
+  })
+
+  mainWindow.webContents.on('will-navigate', (event, targetUrl) => {
+    const rendererUrl = is.dev ? process.env['ELECTRON_RENDERER_URL'] : undefined
+    if (!rendererUrl) {
+      event.preventDefault()
+      return
+    }
+    try {
+      if (new URL(targetUrl).origin !== new URL(rendererUrl).origin) event.preventDefault()
+    } catch {
+      event.preventDefault()
+    }
   })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
@@ -225,10 +229,8 @@ function createWindow(): void {
 // ---- IPC handlers ----
 function registerIpcHandlers(): void {
   ipcMain.handle(IPC.getAppInfo, () => {
-    // 首次调用时初始化沙箱工作区（应用数据目录，打包部署位置）
-    if (!sandboxDir) {
-      sandboxDir = join(app.getPath('userData'), 'workspace')
-    }
+    if (!sandboxDir) sandboxDir = join(app.getPath('userData'), 'workspace')
+    if (!workspaceRoot) workspaceRoot = sandboxDir
     return {
       platform: process.platform,
       version: process.version,
@@ -236,7 +238,7 @@ function registerIpcHandlers(): void {
       appVersion: app.getVersion(),
       // 存储/缓存根目录（安装目录下 SmartDream/）与默认空间存储路径（其下 workspace/）
       dataDir: app.getPath('userData'),
-      workspaceRoot: join(app.getPath('userData'), 'workspace')
+      workspaceRoot
     }
   })
 
@@ -285,184 +287,168 @@ function registerIpcHandlers(): void {
     }
   })
 
-  // 授权本地目录为工作空间（用户显式同意）
-  ipcMain.handle(IPC.authorizeWorkspace, async (_e, dirPath: string) => {
-    if (!dirPath || !isAbsolute(dirPath)) {
-      throw new Error('无效的目录路径')
-    }
-    let s
-    try {
-      s = await stat(dirPath)
-    } catch {
-      throw new Error(`目录不存在或无法访问: ${basename(dirPath)}`)
-    }
-    if (!s.isDirectory()) {
-      throw new Error(`所选路径不是目录: ${basename(dirPath)}`)
-    }
-    authorizedDirs.add(normalizePath(dirPath))
-    return currentWorkspace()
+  const choosePath = async (
+    event: Electron.IpcMainInvokeEvent,
+    properties: Array<'openDirectory' | 'openFile'>
+  ): Promise<string | undefined> => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const options: Electron.OpenDialogOptions = { properties }
+    const result = win
+      ? await dialog.showOpenDialog(win, options)
+      : await dialog.showOpenDialog(options)
+    return result.canceled ? undefined : result.filePaths[0]
+  }
+
+  ipcMain.handle(IPC.selectAndAuthorizeDirectory, async (event) => {
+    const selected = await choosePath(event, ['openDirectory'])
+    return selected ? fileAuthorization.authorizeDirectory(selected) : undefined
   })
 
-  // 新建空间：在存储根目录（或渲染层传入的空间根目录）下创建同名文件夹，并自动授权该空间
-  ipcMain.handle(IPC.createSpace, async (_e, name: string, parentDir?: string) => {
-    const clean = String(name ?? '').trim()
+  ipcMain.handle(IPC.selectAndAuthorizeFile, async (event) => {
+    const selected = await choosePath(event, ['openFile'])
+    return selected ? fileAuthorization.authorizeFile(selected) : undefined
+  })
+
+  ipcMain.handle(IPC.selectWorkspaceRoot, async (event) => {
+    const selected = await choosePath(event, ['openDirectory'])
+    if (!selected) return undefined
+    workspaceRoot = await fileAuthorization.authorizeDirectory(selected)
+    return workspaceRoot
+  })
+
+  // 空间根目录只由主进程维护：默认是应用工作区，用户可通过系统目录选择器临时更改。
+  ipcMain.handle(IPC.createSpace, async (_e, name: unknown) => {
+    if (typeof name !== 'string') throw new Error('空间名称无效')
+    const clean = name.trim()
     if (!clean) throw new Error('空间名称不能为空')
     if (clean.length > 60) throw new Error('空间名称过长（最多 60 个字符）')
     // 文件系统非法字符 + 控制字符 + 相对路径保留名
     if (/[\\/:*?"<>|]/.test(clean) || /[\u0000-\u001f]/.test(clean) || clean === '.' || clean === '..') {
       throw new Error('空间名称包含非法字符')
     }
-    const root = parentDir && isAbsolute(parentDir) ? parentDir : app.getPath('userData')
+    const root = await canonicalizePath(workspaceRoot)
+    if (!fileAuthorization.isAuthorizedCanonicalPath(root, 'write')) {
+      throw new Error('空间存储目录未经本次运行授权，请重新选择目录')
+    }
     const dir = pathJoin(root, clean)
     await mkdir(dir, { recursive: true })
+    const canonicalDir = await canonicalizePath(dir)
+    if (!isWithinPath(root, canonicalDir)) {
+      throw new Error('拒绝创建空间：目标目录超出空间存储目录')
+    }
     // 仅内置「项目说明」空间播种功能/技术两份说明文档（文档位于空间根目录）；
     // 普通新建空间不生成该文件夹，项目说明只随对应项目的内置空间存在
     if (clean === PROJECT_DOCS_DIRNAME) {
-      await seedProjectDocs(dir)
+      await seedProjectDocs(canonicalDir)
     }
-    authorizedDirs.add(normalizePath(dir))
-    return dir
+    return canonicalDir
   })
 
   // 读取目录：仅允许已授权工作空间或沙箱工作区
-  ipcMain.handle(IPC.readDirectory, async (_e, dirPath: string) => {
-    if (!dirPath || !isAbsolute(dirPath)) {
-      throw new Error('无效的目录路径')
-    }
-    if (!isPathAllowed(dirPath)) {
-      throw new Error('拒绝访问：该目录未经授权，请先通过目录选择器授权工作空间')
-    }
-    return buildFileTree(dirPath)
+  ipcMain.handle(IPC.readDirectory, async (_e, dirPath: unknown) => {
+    const canonical = await fileAuthorization.resolveAuthorizedPath(dirPath, 'read')
+    if (!(await stat(canonical)).isDirectory()) throw new Error('所选路径不是目录')
+    return buildFileTree(canonical)
   })
 
-  ipcMain.handle(IPC.readFile, async (_e, filePath: string) => {
-    if (!filePath || !isAbsolute(filePath)) {
-      throw new Error('无效的文件路径')
-    }
-    if (!isPathAllowed(filePath)) {
-      throw new Error('拒绝访问：该文件未经授权')
-    }
+  ipcMain.handle(IPC.readFile, async (_e, filePath: unknown) => {
     try {
-      const content = await readFile(filePath, 'utf-8')
+      const canonical = await fileAuthorization.resolveAuthorizedPath(filePath, 'read')
+      const info = await stat(canonical)
+      if (!info.isFile()) throw new Error('目标不是普通文件')
+      if (info.size > MAX_IPC_FILE_BYTES) throw new Error('文件过大，无法通过预览读取')
+      const content = await readFile(canonical, 'utf-8')
       return {
-        path: filePath,
+        path: canonical,
         content,
-        language: langFromPath(filePath)
+        language: langFromPath(canonical)
       }
     } catch (err) {
-      throw new Error(`无法读取文件: ${basename(filePath)} - ${(err as Error).message}`)
+      throw new Error(
+        `无法读取文件: ${typeof filePath === 'string' ? basename(filePath) : '无效路径'} - ${(err as Error).message}`
+      )
     }
   })
 
   // 读取文件为 data URL（用于图片等二进制预览），仅限已授权路径
-  ipcMain.handle(IPC.readFileAsDataUrl, async (_e, filePath: string) => {
-    if (!filePath || !isAbsolute(filePath)) {
-      throw new Error('无效的文件路径')
-    }
-    if (!isPathAllowed(filePath)) {
-      throw new Error('拒绝访问：该文件未经授权')
-    }
+  ipcMain.handle(IPC.readFileAsDataUrl, async (_e, filePath: unknown) => {
     try {
-      const buf = await readFile(filePath)
-      const mime = MIME_BY_EXT[extname(filePath).toLowerCase()] ?? 'application/octet-stream'
+      const canonical = await fileAuthorization.resolveAuthorizedPath(filePath, 'read')
+      const info = await stat(canonical)
+      if (!info.isFile()) throw new Error('目标不是普通文件')
+      if (info.size > MAX_IPC_FILE_BYTES) throw new Error('文件过大，无法通过预览读取')
+      const buf = await readFile(canonical)
+      const mime = MIME_BY_EXT[extname(canonical).toLowerCase()] ?? 'application/octet-stream'
       const dataUrl = `data:${mime};base64,${buf.toString('base64')}`
-      return { path: filePath, dataUrl }
+      return { path: canonical, dataUrl }
     } catch (err) {
-      throw new Error(`无法读取文件: ${basename(filePath)} - ${(err as Error).message}`)
+      throw new Error(
+        `无法读取文件: ${typeof filePath === 'string' ? basename(filePath) : '无效路径'} - ${(err as Error).message}`
+      )
     }
   })
 
   // 写入文件：仅允许已授权工作空间或沙箱工作区
-  ipcMain.handle(IPC.writeFile, async (_e, filePath: string, content: string) => {
-    if (!filePath || !isAbsolute(filePath)) {
-      throw new Error('无效的文件路径')
-    }
-    if (!isPathAllowed(filePath)) {
-      throw new Error('拒绝访问：目标路径未经授权')
+  ipcMain.handle(IPC.writeFile, async (_e, filePath: unknown, content: unknown) => {
+    if (typeof content !== 'string') throw new Error('文件内容格式无效')
+    if (Buffer.byteLength(content, 'utf8') > MAX_IPC_FILE_BYTES) {
+      throw new Error('文件内容过大，无法写入')
     }
     try {
-      await writeFile(filePath, content, 'utf-8')
-      return { path: filePath, ok: true }
+      const canonical = await fileAuthorization.resolveAuthorizedPath(filePath, 'write', true)
+      await writeFile(canonical, content, 'utf-8')
+      return { path: canonical, ok: true }
     } catch (err) {
-      throw new Error(`无法写入文件: ${basename(filePath)} - ${(err as Error).message}`)
+      throw new Error(
+        `无法写入文件: ${typeof filePath === 'string' ? basename(filePath) : '无效路径'} - ${(err as Error).message}`
+      )
     }
   })
 
   // 创建新文件（空文件）：仅允许沙箱工作区或已授权工作空间
-  ipcMain.handle(IPC.createFile, async (_e, filePath: string) => {
-    if (!filePath || !isAbsolute(filePath)) {
-      throw new Error('无效的文件路径')
-    }
-    if (!isPathAllowed(filePath)) {
-      throw new Error('拒绝访问：仅可在沙箱工作区或已授权工作空间内创建文件')
-    }
+  ipcMain.handle(IPC.createFile, async (_e, filePath: unknown) => {
+    const canonical = await fileAuthorization.resolveAuthorizedPath(filePath, 'write', true)
     try {
       // 确保父目录存在
-      await mkdir(dirnameOf(filePath), { recursive: true })
+      await mkdir(dirnameOf(canonical), { recursive: true })
+      const verified = await fileAuthorization.resolveAuthorizedPath(canonical, 'write', true)
       // 文件不存在才创建，避免覆盖已有内容
-      await writeFile(filePath, '', { flag: 'wx' })
-      return { path: filePath, ok: true }
+      await writeFile(verified, '', { flag: 'wx' })
+      return { path: verified, ok: true }
     } catch (err) {
-      // wx 模式下文件已存在会抛 EEXIST，视为成功（幂等）
       if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
-        return { path: filePath, ok: true }
+        const existing = await fileAuthorization.resolveAuthorizedPath(canonical, 'write')
+        if (!(await stat(existing)).isFile()) throw new Error('目标不是普通文件')
+        return { path: existing, ok: true }
       }
-      throw new Error(`无法创建文件: ${basename(filePath)} - ${(err as Error).message}`)
+      throw new Error(`无法创建文件: ${basename(canonical)} - ${(err as Error).message}`)
     }
   })
 
-  // 授权单个文件：用户显式选择文件后，允许读取该文件本身
-  ipcMain.handle(IPC.authorizeFile, async (_e, filePath: string) => {
-    if (!filePath || !isAbsolute(filePath)) {
-      throw new Error('无效的文件路径')
+  ipcMain.handle(IPC.openPath, async (_e, path: unknown) => {
+    const canonical = await canonicalizePath(path)
+    const dataDir = await canonicalizePath(app.getPath('userData'))
+    if (
+      !fileAuthorization.isAuthorizedCanonicalPath(canonical, 'read') &&
+      !isWithinPath(dataDir, canonical)
+    ) {
+      throw new Error('拒绝打开：该路径未经授权')
     }
-    let s
-    try {
-      s = await stat(filePath)
-    } catch {
-      throw new Error(`文件不存在或无法访问: ${basename(filePath)}`)
-    }
-    if (s.isDirectory()) {
-      throw new Error(`所选路径是目录，请使用授权工作空间`)
-    }
-    authorizedFiles.add(normalizePath(filePath))
-    return currentWorkspace()
-  })
-
-  // 打开系统目录选择器（仅目录），传入父窗口修复无响应
-  ipcMain.handle(IPC.selectDirectory, async (e) => {
-    const win = BrowserWindow.fromWebContents(e.sender)
-    const opts: Electron.OpenDialogOptions = {
-      title: '选择文件夹',
-      properties: ['openDirectory']
-    }
-    const r = win
-      ? await dialog.showOpenDialog(win, opts)
-      : await dialog.showOpenDialog(opts)
-    return r.filePaths[0]
-  })
-
-  // 打开系统文件选择器（仅文件），传入父窗口
-  ipcMain.handle(IPC.selectFile, async (e) => {
-    const win = BrowserWindow.fromWebContents(e.sender)
-    const opts: Electron.OpenDialogOptions = {
-      title: '选择文件',
-      properties: ['openFile']
-    }
-    const r = win
-      ? await dialog.showOpenDialog(win, opts)
-      : await dialog.showOpenDialog(opts)
-    return r.filePaths[0]
-  })
-
-  ipcMain.handle(IPC.openPath, async (_e, path: string) => {
     // shell.openPath 以返回值报错（空串成功），转成 rejection 供渲染层捕获
-    const err = await shell.openPath(path)
+    const err = await shell.openPath(canonical)
     if (err) throw new Error(`无法打开: ${err}`)
   })
 
-  ipcMain.handle(IPC.showInFolder, (_e, path: string) => {
-    shell.showItemInFolder(path)
+  ipcMain.handle(IPC.showInFolder, async (_e, path: unknown) => {
+    const canonical = await canonicalizePath(path)
+    const dataDir = await canonicalizePath(app.getPath('userData'))
+    if (
+      !fileAuthorization.isAuthorizedCanonicalPath(canonical, 'read') &&
+      !isWithinPath(dataDir, canonical)
+    ) {
+      throw new Error('拒绝显示：该路径未经授权')
+    }
+    shell.showItemInFolder(canonical)
   })
 
   ipcMain.on(IPC.windowMinimize, (e) => {
@@ -521,7 +507,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC.apiKeyClear, () => clearApiKey())
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.demo.ai-agent')
 
   app.on('browser-window-created', (_, window) => {
@@ -538,11 +524,12 @@ app.whenReady().then(() => {
     mkdirSync(app.getPath('userData'), { recursive: true })
   }
   sandboxDir = join(app.getPath('userData'), 'workspace')
-  mkdir(sandboxDir, { recursive: true }).catch(() => {})
+  await mkdir(sandboxDir, { recursive: true })
+  sandboxDir = await fileAuthorization.initializeSandbox(sandboxDir, app.getPath('userData'))
+  workspaceRoot = sandboxDir
   initDb()
   initializeApiCredential()
   registerDbHandlers()
-  restoreAuthorizations()
 
   registerIpcHandlers()
   createWindow()
@@ -551,15 +538,6 @@ app.whenReady().then(() => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
-
-/** 启动时从持久化任务恢复主进程授权状态（工作空间全量恢复以支持多空间并存，授权文件全量恢复） */
-function restoreAuthorizations(): void {
-  if (!isDbReady()) return
-  for (const s of getAllSessions()) {
-    if (s.workspace) authorizedDirs.add(normalizePath(s.workspace))
-    if (s.authorizedFile) authorizedFiles.add(s.authorizedFile)
-  }
-}
 
 app.on('will-quit', () => {
   closeDb()

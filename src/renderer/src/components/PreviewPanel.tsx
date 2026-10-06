@@ -54,6 +54,7 @@ export default function PreviewPanel(): JSX.Element {
       setFileRoot(null)
       return
     }
+    setFileRoot(null)
     if (!window.electronAPI) {
       // 无 Electron（纯浏览器预览）时用 mock 文件树兜底
       setFileRoot(MOCK_PROJECT_FILES as unknown as FileNode)
@@ -75,14 +76,33 @@ export default function PreviewPanel(): JSX.Element {
   // 授权单个文件时（未授权目录），文件树展示为「单文件树」，便于在「文件」Tab 中看到该文件
   useEffect(() => {
     if (workspaceDir || !authorizedFile) return
-    const name = authorizedFile.split(/[\\/]/).pop() || authorizedFile
-    const ext = name.includes('.') ? name.split('.').pop() : undefined
-    setFileRoot({
-      name,
-      path: authorizedFile,
-      isDirectory: false,
-      extension: ext
-    })
+    if (!window.electronAPI) {
+      const name = authorizedFile.split(/[\\/]/).pop() || authorizedFile
+      const ext = name.includes('.') ? name.split('.').pop() : undefined
+      setFileRoot({ name, path: authorizedFile, isDirectory: false, extension: ext })
+      return
+    }
+
+    setFileRoot(null)
+    let active = true
+    window.electronAPI
+      .getWorkspace()
+      .then(({ authorizedFiles }) => {
+        if (!active || !authorizedFiles.includes(authorizedFile)) {
+          if (active) setFileRoot(null)
+          return
+        }
+        const name = authorizedFile.split(/[\\/]/).pop() || authorizedFile
+        const ext = name.includes('.') ? name.split('.').pop() : undefined
+        setFileRoot({ name, path: authorizedFile, isDirectory: false, extension: ext })
+      })
+      .catch((err) => {
+        console.warn('[SmartDream] 查询文件授权状态失败:', err)
+        if (active) setFileRoot(null)
+      })
+    return () => {
+      active = false
+    }
   }, [workspaceDir, authorizedFile])
 
   // 授权单个文件时，直接打开该文件代码

@@ -85,7 +85,7 @@ npm run build:unpack
 
 ## 🔌 IPC 与安全
 
-渲染进程仅通过 `preload` 的 `contextBridge` 调用白名单 API；应用开启 `contextIsolation`、关闭 `nodeIntegration`。本地文件访问由主进程验证授权路径。更多 IPC、持久化与架构细节见 [`docs/技术说明.md`](docs/技术说明.md)。
+渲染进程仅通过 `preload` 的 `contextBridge` 调用白名单 API；应用开启 `sandbox` 和 `contextIsolation`、关闭 `nodeIntegration`。本地文件访问由主进程验证真实路径和本次运行内的授权。更多 IPC、持久化与架构细节见 [`docs/技术说明.md`](docs/技术说明.md)。
 
 ## 🔄 架构说明
 

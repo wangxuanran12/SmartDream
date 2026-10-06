@@ -23,6 +23,8 @@ export interface WorkspaceInfo {
   sandboxDir: string
   /** 当前已授权的工作空间目录集合（支持多个空间并存） */
   authorizedDirs: string[]
+  /** 当前已授权读取的单个文件（仅本次运行有效） */
+  authorizedFiles: string[]
 }
 
 export type Platform = 'darwin' | 'win32' | 'linux'
@@ -60,11 +62,10 @@ export const IPC = {
   writeFile: 'fs:write-file',
   createFile: 'fs:create-file',
   getWorkspace: 'fs:get-workspace',
-  authorizeWorkspace: 'fs:authorize-workspace',
-  authorizeFile: 'fs:authorize-file',
+  selectAndAuthorizeDirectory: 'dialog:select-authorized-directory',
+  selectAndAuthorizeFile: 'dialog:select-authorized-file',
+  selectWorkspaceRoot: 'dialog:select-workspace-root',
   createSpace: 'space:create',
-  selectDirectory: 'dialog:select-directory',
-  selectFile: 'dialog:select-file',
   openPath: 'shell:open-path',
   showInFolder: 'shell:show-in-folder',
   windowMinimize: 'window:minimize',
@@ -184,16 +185,14 @@ export interface ElectronAPI {
   createFile: (filePath: string) => Promise<WriteResult>
   /** 查询当前工作空间授权状态与沙箱目录 */
   getWorkspace: () => Promise<WorkspaceInfo>
-  /** 授权一个本地目录为工作空间（用户显式同意后才可访问） */
-  authorizeWorkspace: (dirPath: string) => Promise<WorkspaceInfo>
-  /** 授权单个文件（用户显式选择文件后，允许读取该文件） */
-  authorizeFile: (filePath: string) => Promise<WorkspaceInfo>
-  /** 新建空间：在空间根目录（默认为存储根目录）下创建同名文件夹并自动授权，返回空间目录绝对路径 */
-  createSpace: (name: string, parentDir?: string) => Promise<string>
-  /** 打开系统目录选择器（仅目录），返回选中目录路径（取消时为 undefined） */
-  selectDirectory: () => Promise<string | undefined>
-  /** 打开系统文件选择器（仅文件），返回选中文件路径（取消时为 undefined） */
-  selectFile: () => Promise<string | undefined>
+  /** 通过系统目录选择器选择并授权工作空间，不能由 renderer 指定任意路径 */
+  selectAndAuthorizeDirectory: () => Promise<string | undefined>
+  /** 通过系统文件选择器选择并授权单文件，只允许读取该文件 */
+  selectAndAuthorizeFile: () => Promise<string | undefined>
+  /** 通过系统目录选择器设置本次运行的默认空间根目录 */
+  selectWorkspaceRoot: () => Promise<string | undefined>
+  /** 在主进程管理的空间根目录中创建空间，不接受 renderer 提供的路径 */
+  createSpace: (name: string) => Promise<string>
   openPath: (path: string) => Promise<void>
   showInFolder: (path: string) => Promise<void>
   windowMinimize: () => void
