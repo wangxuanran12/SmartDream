@@ -211,37 +211,112 @@ function ScaleSlider(): JSX.Element {
 /** 模型服务（真实生效）：API Key / 基础端点 / 模型 ID，变更即持久化；Key 为空时回复走动态 mock 兜底 */
 function ModelServiceSection(): JSX.Element {
   const t = useT()
-  const apiKey = useUIStore((s) => s.apiKey)
+  const apiKeyConfigured = useUIStore((s) => s.apiKeyConfigured)
+  const apiKeyPersistent = useUIStore((s) => s.apiKeyPersistent)
+  const apiKeyWarning = useUIStore((s) => s.apiKeyWarning)
   const apiBaseUrl = useUIStore((s) => s.apiBaseUrl)
   const apiModel = useUIStore((s) => s.apiModel)
   const setApiConfig = useUIStore((s) => s.setApiConfig)
+  const setApiKeyStatus = useUIStore((s) => s.setApiKeyStatus)
+  const [apiKeyInput, setApiKeyInput] = useState('')
+  const [baseUrlDraft, setBaseUrlDraft] = useState(apiBaseUrl)
+  const [keyActionError, setKeyActionError] = useState('')
+  const [keyActionPending, setKeyActionPending] = useState(false)
   const [showKey, setShowKey] = useState(false)
+  useEffect(() => setBaseUrlDraft(apiBaseUrl), [apiBaseUrl])
   const inputCls =
     'h-9 w-[320px] rounded-lg border border-surface-border bg-surface-raised px-3 text-[13px] text-text-primary outline-none transition-colors placeholder:text-text-muted focus:border-accent'
+  const saveApiKey = async (): Promise<void> => {
+    const api = window.electronAPI
+    if (!api || !apiKeyInput.trim()) return
+    setKeyActionPending(true)
+    setKeyActionError('')
+    try {
+      const status = await api.setApiKey(apiKeyInput)
+      setApiKeyStatus(status)
+      setApiKeyInput('')
+    } catch (err) {
+      setKeyActionError((err as Error).message || t('apiKeySaveFailed'))
+    } finally {
+      setKeyActionPending(false)
+    }
+  }
+  const clearSavedApiKey = async (): Promise<void> => {
+    const api = window.electronAPI
+    if (!api) return
+    setKeyActionPending(true)
+    setKeyActionError('')
+    try {
+      setApiKeyStatus(await api.clearApiKey())
+      setApiKeyInput('')
+    } catch (err) {
+      setKeyActionError((err as Error).message || t('apiKeySaveFailed'))
+    } finally {
+      setKeyActionPending(false)
+    }
+  }
+  const commitBaseUrl = (): void => {
+    const next = baseUrlDraft.trim().replace(/\/+$/, '')
+    if (!next || next === apiBaseUrl) return
+    if (apiKeyConfigured && !window.confirm(t('apiEndpointKeyWarning'))) {
+      setBaseUrlDraft(apiBaseUrl)
+      return
+    }
+    setApiConfig({ apiBaseUrl: next })
+  }
   return (
     <Card>
       <Row title={t('modelApiKey')} desc={t('modelApiKeyDesc')}>
-        <div className="relative">
-          <input
-            type={showKey ? 'text' : 'password'}
-            value={apiKey}
-            placeholder={t('apiKeyPlaceholder')}
-            onChange={(e) => setApiConfig({ apiKey: e.target.value })}
-            className={`${inputCls} pr-12`}
-          />
-          <button
-            onClick={() => setShowKey((v) => !v)}
-            className="absolute right-2 top-1/2 -translate-y-1/2 text-[12px] text-text-muted transition-colors hover:text-text-primary"
-          >
-            {showKey ? t('hideKey') : t('showKey')}
-          </button>
+        <div className="flex w-[320px] flex-col gap-2">
+          <div className="relative">
+            <input
+              type={showKey ? 'text' : 'password'}
+              value={apiKeyInput}
+              placeholder={t('apiKeyPlaceholder')}
+              onChange={(e) => setApiKeyInput(e.target.value)}
+              className={`${inputCls} pr-12`}
+            />
+            <button
+              type="button"
+              onClick={() => setShowKey((v) => !v)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-[12px] text-text-muted transition-colors hover:text-text-primary"
+            >
+              {showKey ? t('hideKey') : t('showKey')}
+            </button>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={!apiKeyInput.trim() || keyActionPending}
+              onClick={() => void saveApiKey()}
+              className="rounded-md bg-accent px-3 py-1.5 text-[12px] text-white disabled:opacity-50"
+            >
+              {t('saveApiKey')}
+            </button>
+            <button
+              type="button"
+              disabled={!apiKeyConfigured || keyActionPending}
+              onClick={() => void clearSavedApiKey()}
+              className="rounded-md border border-surface-border px-3 py-1.5 text-[12px] text-text-secondary disabled:opacity-50"
+            >
+              {t('clearApiKey')}
+            </button>
+            <span className="text-[11px] text-text-muted">
+              {apiKeyWarning ||
+                (apiKeyConfigured
+                  ? t(apiKeyPersistent ? 'apiKeyStatusSaved' : 'apiKeyStatusSession')
+                  : t('apiKeyStatusMissing'))}
+            </span>
+          </div>
+          {keyActionError && <div className="text-[11px] text-red-400">{keyActionError}</div>}
         </div>
       </Row>
       <Row title={t('modelBaseUrl')} desc={t('modelBaseUrlDesc')}>
         <input
           type="text"
-          value={apiBaseUrl}
-          onChange={(e) => setApiConfig({ apiBaseUrl: e.target.value })}
+          value={baseUrlDraft}
+          onChange={(e) => setBaseUrlDraft(e.target.value)}
+          onBlur={commitBaseUrl}
           className={inputCls}
         />
       </Row>

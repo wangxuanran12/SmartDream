@@ -70,7 +70,6 @@ function applySettings(s: DbSnapshot['settings']): void {
   }
   if (typeof s.workspaceRoot === 'string') patch.workspaceRoot = s.workspaceRoot
   // 模型服务配置：非空字符串才覆盖默认值
-  if (typeof s.apiKey === 'string' && s.apiKey) patch.apiKey = s.apiKey
   if (typeof s.apiBaseUrl === 'string' && s.apiBaseUrl) patch.apiBaseUrl = s.apiBaseUrl
   if (typeof s.apiModel === 'string' && s.apiModel) patch.apiModel = s.apiModel
   if (typeof s.previewVisible === 'boolean') patch.previewVisible = s.previewVisible
@@ -172,6 +171,12 @@ async function ensureProjectDocsSpace(api: NonNullable<Window['electronAPI']>): 
 export async function hydrate(): Promise<void> {
   const api = window.electronAPI
   if (!api) return
+
+  try {
+    useUIStore.getState().setApiKeyStatus(await api.getApiKeyStatus())
+  } catch {
+    // Keep the default unconfigured state if the credential IPC is unavailable.
+  }
 
   let snap: DbSnapshot | null
   try {

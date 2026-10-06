@@ -17,12 +17,13 @@ export function abortChat(requestId: string): void {
 
 interface RunChatStreamArgs {
   payload: ChatStreamPayload
+  apiKey: string
   onChunk: (delta: string) => void
 }
 
 /** 发起流式请求并消费 SSE 流，结束时 resolve 结果 */
-export async function runChatStream({ payload, onChunk }: RunChatStreamArgs): Promise<ChatStreamResult> {
-  const { requestId, messages, apiKey, baseUrl, model } = payload
+export async function runChatStream({ payload, apiKey, onChunk }: RunChatStreamArgs): Promise<ChatStreamResult> {
+  const { requestId, messages, baseUrl, model } = payload
   const controller = new AbortController()
   inflight.set(requestId, controller)
 

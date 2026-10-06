@@ -7,7 +7,8 @@ import type {
   MessagePayload,
   SettingsPatch,
   ElectronAPI,
-  ChatMessage
+  ChatMessage,
+  ApiKeyStatus
 } from '@shared/types'
 
 /** 会话级可编辑元信息 */
@@ -489,8 +490,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
     const ui = useUIStore.getState()
     const api = window.electronAPI
-    const canReal =
-      !!ui.apiKey && !!api && typeof api.chatStream === 'function'
+    const canReal = ui.apiKeyConfigured && !!api && typeof api.chatStream === 'function'
 
     // 空间内置项目说明：会话绑定工作空间且存在「项目说明」文档时读取（真实 API 注入 system 上下文、
     // Mock 按提问复述文档内容）。读取为本地 IPC 耗时极短；期间被新发送中止则放弃本次回复。
@@ -542,7 +542,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           {
             requestId,
             messages: chatMessages,
-            apiKey: ui.apiKey,
             baseUrl: (ui.apiBaseUrl || DEFAULT_API_BASE_URL).replace(/\/+$/, ''),
             model: ui.apiModel || DEFAULT_API_MODEL
           },
@@ -638,14 +637,17 @@ interface UIState {
   uiScale: UiScale
   /** 默认工作空间存储路径（F-44 通用 → 存储，展示 + 持久化） */
   workspaceRoot: string
-  /** 模型服务 API Key（通用 → 模型服务；为空时回复走动态 mock 兜底） */
-  apiKey: string
+  /** API Key 是否配置；凭据正文仅由主进程持有 */
+  apiKeyConfigured: boolean
+  apiKeyPersistent: boolean
+  apiKeyWarning: string
   /** OpenAI 兼容基础端点 */
   apiBaseUrl: string
   /** 模型 ID */
   apiModel: string
   /** 更新模型服务配置（去尾斜杠 / 防抖落库） */
-  setApiConfig: (patch: Partial<Pick<UIState, 'apiKey' | 'apiBaseUrl' | 'apiModel'>>) => void
+  setApiConfig: (patch: Partial<Pick<UIState, 'apiBaseUrl' | 'apiModel'>>) => void
+  setApiKeyStatus: (status: ApiKeyStatus) => void
   sidebarCollapsed: boolean
   previewTab: PreviewTab
   sidebarWidth: number
@@ -686,7 +688,9 @@ export const useUIStore = create<UIState>((set) => ({
   lang: 'zh',
   uiScale: 'default',
   workspaceRoot: '',
-  apiKey: '',
+  apiKeyConfigured: false,
+  apiKeyPersistent: false,
+  apiKeyWarning: '',
   apiBaseUrl: DEFAULT_API_BASE_URL,
   apiModel: DEFAULT_API_MODEL,
   sidebarCollapsed: false,
@@ -745,8 +749,7 @@ export const useUIStore = create<UIState>((set) => ({
   },
 
   setApiConfig: (patch) => {
-    const next: Partial<Pick<UIState, 'apiKey' | 'apiBaseUrl' | 'apiModel'>> = {}
-    if (typeof patch.apiKey === 'string') next.apiKey = patch.apiKey.trim()
+    const next: Partial<Pick<UIState, 'apiBaseUrl' | 'apiModel'>> = {}
     if (typeof patch.apiBaseUrl === 'string') {
       // 端点去空白与尾斜杠，避免拼接出 //chat/completions
       next.apiBaseUrl = patch.apiBaseUrl.trim().replace(/\/+$/, '')
@@ -755,6 +758,13 @@ export const useUIStore = create<UIState>((set) => ({
     set(next)
     saveUIDebounced(next)
   },
+
+  setApiKeyStatus: (status) =>
+    set({
+      apiKeyConfigured: status.configured,
+      apiKeyPersistent: status.persistent,
+      apiKeyWarning: status.warning
+    }),
 
   toggleTheme: () =>
     set((s) => {
