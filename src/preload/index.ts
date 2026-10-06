@@ -40,6 +40,9 @@ const api: ElectronAPI = {
     ipcRenderer.invoke(IPC.dbMessagesReplace, taskId, messages),
   dbSettingsUpsert: (patch) => ipcRenderer.invoke(IPC.dbSettingsUpsert, patch),
   dbUserUpsert: (user) => ipcRenderer.invoke(IPC.dbUserUpsert, user),
+  getApiKeyStatus: () => ipcRenderer.invoke(IPC.apiKeyStatus),
+  setApiKey: (value) => ipcRenderer.invoke(IPC.apiKeySet, value),
+  clearApiKey: () => ipcRenderer.invoke(IPC.apiKeyClear),
   // 流式聊天：先同步订阅 chunk 事件（按 requestId 过滤）再 invoke，settle 后移除监听
   chatStream: (payload: ChatStreamPayload, onChunk: (delta: string) => void) => {
     const listener = (_e: IpcRendererEvent, reqId: string, delta: string): void => {

@@ -9,6 +9,14 @@ import { IPC, type FileNode, type WorkspaceInfo, type ChatStreamPayload } from '
 import { initDb, closeDb, registerDbHandlers, getAllSessions, isDbReady } from './db'
 import { runChatStream, abortChat } from './llm'
 import { seedProjectDocs, PROJECT_DOCS_DIRNAME } from './spaceDocs'
+import {
+  clearApiKey,
+  getApiKey,
+  getApiKeyStatus,
+  initializeApiCredential,
+  setApiKey
+} from './credentials'
+import { normalizeApiBaseUrl } from './apiConfig'
 
 // E2E/自动化测试：允许重定向应用数据目录（正常启动不设置该变量，无任何影响）
 // 默认：存储/缓存统一放在应用安装目录下的 SmartDream/（与应用同名，dev 为项目根目录，打包后为可执行文件同级目录）
@@ -475,9 +483,30 @@ function registerIpcHandlers(): void {
 
   // 流式聊天转发：LLM SSE 逐 delta 经 sender 推回 renderer；sender 销毁时中止请求
   ipcMain.handle(IPC.chatSend, (e, payload: ChatStreamPayload) => {
+    if (
+      !payload ||
+      typeof payload.requestId !== 'string' ||
+      !Array.isArray(payload.messages) ||
+      typeof payload.model !== 'string' ||
+      typeof payload.baseUrl !== 'string'
+    ) {
+      return { ok: false, error: '聊天请求参数无效' }
+    }
+    const apiKey = getApiKey()
+    if (!apiKey) return { ok: false, error: '尚未配置 API Key' }
+    let baseUrl: string
+    try {
+      baseUrl = normalizeApiBaseUrl(
+        payload.baseUrl,
+        is.dev && process.env.WORKBUDDY_ALLOW_LOCAL_LLM_HTTP === '1'
+      )
+    } catch (err) {
+      return { ok: false, error: (err as Error).message }
+    }
     const sender = e.sender
     return runChatStream({
-      payload,
+      payload: { ...payload, baseUrl },
+      apiKey,
       onChunk: (delta) => {
         if (!sender.isDestroyed()) sender.send(IPC.chatOnChunk, payload.requestId, delta)
       }
@@ -486,6 +515,10 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC.chatAbort, (_e, requestId: string) => {
     abortChat(requestId)
   })
+
+  ipcMain.handle(IPC.apiKeyStatus, () => getApiKeyStatus())
+  ipcMain.handle(IPC.apiKeySet, (_e, value: unknown) => setApiKey(value))
+  ipcMain.handle(IPC.apiKeyClear, () => clearApiKey())
 }
 
 app.whenReady().then(() => {
@@ -507,6 +540,7 @@ app.whenReady().then(() => {
   sandboxDir = join(app.getPath('userData'), 'workspace')
   mkdir(sandboxDir, { recursive: true }).catch(() => {})
   initDb()
+  initializeApiCredential()
   registerDbHandlers()
   restoreAuthorizations()
 

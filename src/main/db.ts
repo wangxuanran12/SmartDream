@@ -15,6 +15,7 @@ import {
   type UserPayload,
   type DbSnapshot
 } from '../shared/types'
+import { assertPublicSettingsPatch, decodePublicSettings } from './settingsSecurity'
 
 const SCHEMA_VERSION = 1
 
@@ -28,6 +29,7 @@ export function isDbReady(): boolean {
 function openAndMigrate(dbPath: string): DatabaseSync {
   const conn = new DatabaseSync(dbPath)
   conn.exec('PRAGMA journal_mode = WAL')
+  conn.exec('PRAGMA secure_delete = ON')
   conn.exec('PRAGMA foreign_keys = ON')
   // 预检：损坏的库文件在查询系统表时才会暴露
   conn.prepare('SELECT count(*) FROM sqlite_master').get()
@@ -55,6 +57,10 @@ function openAndMigrate(dbPath: string): DatabaseSync {
     CREATE TABLE IF NOT EXISTS app_settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS secure_credentials (
+      key TEXT PRIMARY KEY,
+      value BLOB NOT NULL
     );
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -196,16 +202,7 @@ export function getSettings(): Record<string, string | number | boolean> {
     key: string
     value: string
   }[]
-  const out: Record<string, string | number | boolean> = {}
-  for (const row of rows) {
-    try {
-      const v = JSON.parse(row.value)
-      if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') out[row.key] = v
-    } catch {
-      // 跳过无法解析的设置项
-    }
-  }
-  return out
+  return decodePublicSettings(rows)
 }
 
 export function getUser(): UserPayload | null {
@@ -223,6 +220,43 @@ export function getSnapshot(): DbSnapshot {
     messages: getAllMessages(),
     settings: getSettings(),
     user: getUser()
+  }
+}
+
+export function getSecureCredential(key: string): Buffer | null {
+  if (!db) return null
+  const row = db.prepare('SELECT value FROM secure_credentials WHERE key = ?').get(key) as
+    | { value: Uint8Array }
+    | undefined
+  return row ? Buffer.from(row.value) : null
+}
+
+export function setSecureCredential(key: string, value: Buffer): void {
+  if (!db) throw new Error('db 未就绪')
+  db.prepare(
+    `INSERT INTO secure_credentials (key, value) VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+  ).run(key, value)
+}
+
+export function deleteSecureCredential(key: string): void {
+  if (!db) return
+  db.prepare('DELETE FROM secure_credentials WHERE key = ?').run(key)
+}
+
+export function takeLegacyApiKey(): string | null {
+  if (!db) return null
+  const row = db.prepare('SELECT value FROM app_settings WHERE key = ?').get('apiKey') as
+    | { value: string }
+    | undefined
+  if (!row) return null
+  db.prepare('DELETE FROM app_settings WHERE key = ?').run('apiKey')
+  db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+  try {
+    const value: unknown = JSON.parse(row.value)
+    return typeof value === 'string' && value.length > 0 ? value : null
+  } catch {
+    return null
   }
 }
 
@@ -302,6 +336,7 @@ export function replaceMessages(taskId: string, messages: MessagePayload[]): voi
 }
 
 export function upsertSettings(patch: SettingsPatch): void {
+  assertPublicSettingsPatch(patch)
   if (!db) return
   const stmt = db.prepare(
     `INSERT INTO app_settings (key, value) VALUES (?, ?)

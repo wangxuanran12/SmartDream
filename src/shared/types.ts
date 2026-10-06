@@ -79,6 +79,9 @@ export const IPC = {
   dbMessagesReplace: 'db:messages-replace',
   dbSettingsUpsert: 'db:settings-upsert',
   dbUserUpsert: 'db:user-upsert',
+  apiKeyStatus: 'credentials:status',
+  apiKeySet: 'credentials:set',
+  apiKeyClear: 'credentials:clear',
   chatSend: 'chat:send',
   chatOnChunk: 'chat:on-chunk',
   chatAbort: 'chat:abort'
@@ -139,7 +142,6 @@ export interface ChatStreamPayload {
   /** 请求唯一标识：chunk 推送按它路由，abort 按它定位 AbortController */
   requestId: string
   messages: ChatMessage[]
-  apiKey: string
   /** OpenAI 兼容基础端点（如 https://open.bigmodel.cn/api/paas/v4，无尾斜杠） */
   baseUrl: string
   model: string
@@ -159,6 +161,12 @@ export interface DbSnapshot {
   messages: MessagePayload[]
   settings: Record<string, string | number | boolean>
   user: UserPayload | null
+}
+
+export interface ApiKeyStatus {
+  configured: boolean
+  persistent: boolean
+  warning: string
 }
 
 // preload 通过 contextBridge 暴露的 API 形状
@@ -210,6 +218,12 @@ export interface ElectronAPI {
   dbSettingsUpsert: (patch: SettingsPatch) => Promise<void>
   /** 写入本地用户档案（单行覆盖） */
   dbUserUpsert: (user: UserPayload) => Promise<void>
+  /** 查询 API Key 是否配置及是否已安全持久化，不返回凭据内容 */
+  getApiKeyStatus: () => Promise<ApiKeyStatus>
+  /** 保存 API Key；凭据内容不会返回 renderer */
+  setApiKey: (value: string) => Promise<ApiKeyStatus>
+  /** 清除已保存 API Key */
+  clearApiKey: () => Promise<ApiKeyStatus>
   /**
    * 获取拖拽文件在磁盘上的绝对路径（webUtils.getPathForFile）。
    * Electron 32+ 已移除 DOM File.path 属性，拖拽附件必须走此方法；
