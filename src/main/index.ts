@@ -26,20 +26,20 @@ import {
   setApiKey
 } from './credentials'
 import { normalizeApiBaseUrl } from './apiConfig'
+import { migrateLegacyDataDirectory } from './dataDirectory'
 
-// E2E/自动化测试：允许重定向应用数据目录（正常启动不设置该变量，无任何影响）
-// 默认：存储/缓存统一放在应用安装目录下的 SmartDream/（与应用同名，dev 为项目根目录，打包后为可执行文件同级目录）
+// E2E/自动化测试：显式覆盖应用数据目录；设置后不执行旧目录迁移
 const dataDirOverride = process.env.WORKBUDDY_DATA_DIR
+const legacyInstallDir = app.isPackaged
+  ? process.platform === 'darwin'
+    ? resolve(app.getPath('exe'), '..', '..', '..', '..')
+    : dirnameOf(app.getPath('exe'))
+  : app.getAppPath()
+const legacyDataDir = join(legacyInstallDir, 'SmartDream')
 if (dataDirOverride) {
   app.setPath('userData', dataDirOverride)
 } else {
-  // 数据目录固定放安装目录下：macOS 从 .../SmartDream.app/Contents/MacOS/<exe> 回退四级到 .app 所在目录，Windows 取 exe 所在安装根目录
-  const installDir = app.isPackaged
-    ? process.platform === 'darwin'
-      ? resolve(app.getPath('exe'), '..', '..', '..', '..')
-      : dirnameOf(app.getPath('exe'))
-    : app.getAppPath()
-  app.setPath('userData', join(installDir, 'SmartDream'))
+  app.setPath('userData', join(app.getPath('appData'), 'SmartDream'))
 }
 
 // ---- 文件类型 → 语言映射（供代码高亮用）----
@@ -507,14 +507,54 @@ app.whenReady().then(async () => {
     optimizer.watchWindowShortcuts(window)
   })
 
+  // 将旧版安装目录数据非破坏性复制到用户级目录；旧目录始终保留。
+  if (!dataDirOverride) {
+    try {
+      const migration = await migrateLegacyDataDirectory(legacyDataDir, app.getPath('userData'))
+      if (migration.copiedFiles > 0) {
+        console.info(`[SmartDream] 已从旧数据目录复制 ${migration.copiedFiles} 个文件；旧目录保留。`)
+      }
+      if (migration.conflicts.length > 0) {
+        await dialog.showMessageBox({
+          type: 'warning',
+          title: 'SmartDream 数据迁移',
+          message: '部分旧数据与新目录中的文件冲突，未覆盖现有文件。',
+          detail: `已复制 ${migration.copiedFiles} 个文件。\n旧数据仍保留在：${legacyDataDir}\n旧版数据库可能包含明文 API Key；确认新目录的数据和密钥状态后，可手动删除旧目录。\n冲突项：${migration.conflicts.length}`
+        })
+      } else if (migration.copiedFiles > 0) {
+        await dialog.showMessageBox({
+          type: 'info',
+          title: 'SmartDream 数据迁移完成',
+          message: `已复制 ${migration.copiedFiles} 个文件到当前用户数据目录。`,
+          detail: `旧数据副本仍保留在：${legacyDataDir}\n旧版数据库可能包含明文 API Key；确认新目录的数据和密钥状态后，可手动删除旧目录。`
+        })
+      }
+    } catch (error) {
+      console.error('[SmartDream] 旧版数据迁移失败:', error)
+      await dialog.showMessageBox({
+        type: 'error',
+        title: 'SmartDream 无法迁移旧数据',
+        message: '应用未启动，以避免使用空白数据目录覆盖或掩盖旧数据。',
+        detail: `旧数据：${legacyDataDir}\n目标目录：${app.getPath('userData')}\n${String(error)}`
+      })
+      app.quit()
+      return
+    }
+  }
+
   // 沙箱工作区 + SQLite（失败自动降级内存态）
-  // 安装目录下的 SmartDream/ 为全新目录时需先创建，SQLite 不会自建缺失的父目录
   try {
     mkdirSync(app.getPath('userData'), { recursive: true })
-  } catch {
-    // 安装目录不可写（如 /Applications 无权限）时降级到系统默认应用数据目录，保证应用能启动
-    app.setPath('userData', join(app.getPath('appData'), 'SmartDream'))
-    mkdirSync(app.getPath('userData'), { recursive: true })
+  } catch (error) {
+    console.error('[SmartDream] 无法创建应用数据目录:', error)
+    await dialog.showMessageBox({
+      type: 'error',
+      title: 'SmartDream 无法启动',
+      message: '无法访问当前用户的应用数据目录。',
+      detail: `${app.getPath('userData')}\n${String(error)}`
+    })
+    app.quit()
+    return
   }
   sandboxDir = join(app.getPath('userData'), 'workspace')
   await mkdir(sandboxDir, { recursive: true })

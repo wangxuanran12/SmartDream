@@ -2,7 +2,7 @@ import { memo, useEffect, useState } from 'react'
 import { User, Bot, FileText, ListChecks, MessageCircleQuestion, Play, PencilLine } from 'lucide-react'
 import type { Message } from '../types'
 import Markdown from './Markdown'
-import { useSessionStore, useUIStore } from '../store/useStore'
+import { genMessageId, useSessionStore, useUIStore } from '../store/useStore'
 import { useT } from '../i18n'
 
 /** 运行耗时：响应开始即实时展示，输出完成后定格 */
@@ -24,7 +24,9 @@ function RunTimer({ message }: { message: Message }): JSX.Element | null {
 
 function MessageBubbleBase({ message }: { message: Message }): JSX.Element {
   const theme = useUIStore((s) => s.theme)
-  const { activeId, updateSession, runAssistant } = useSessionStore()
+  const activeId = useSessionStore((s) => s.activeId)
+  const updateSession = useSessionStore((s) => s.updateSession)
+  const runAssistant = useSessionStore((s) => s.runAssistant)
   const t = useT()
   const isUser = message.role === 'user'
 
@@ -73,7 +75,7 @@ function MessageBubbleBase({ message }: { message: Message }): JSX.Element {
     useSessionStore.getState().confirmPlan(activeId, message.id)
     updateSession(activeId, { status: 'running' })
     useSessionStore.getState().addMessage(activeId, {
-      id: `u_${Date.now()}`,
+      id: genMessageId(),
       role: 'user',
       content: t('msgStartExecute'),
       mode: 'plan'

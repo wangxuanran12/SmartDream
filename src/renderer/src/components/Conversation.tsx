@@ -2,13 +2,13 @@ import { useEffect, useRef } from 'react'
 import MessageBubble from './MessageBubble'
 import CommandBar from './CommandBar'
 import { useSessionStore } from '../store/useStore'
+import { selectActiveSession } from '../store/selectors'
 import { Sparkles } from 'lucide-react'
 import { useT } from '../i18n'
 
 export default function Conversation(): JSX.Element {
   const t = useT()
-  const { sessions, activeId } = useSessionStore()
-  const session = sessions.find((s) => s.id === activeId)
+  const session = useSessionStore(selectActiveSession)
   const bottomRef = useRef<HTMLDivElement>(null)
 
   // 自动滚动到底部：流式输出中用即时滚动（高频触发下 smooth 会反复重启造成抖动），其余场景平滑滚动

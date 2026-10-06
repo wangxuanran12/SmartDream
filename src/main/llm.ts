@@ -12,6 +12,7 @@ interface RunChatStreamArgs {
   payload: ChatStreamPayload
   apiKey: string
   onChunk: (delta: string) => void
+  timeoutMs?: number
 }
 
 function consumeEvent(event: string, onChunk: (delta: string) => void): {
@@ -45,7 +46,8 @@ function normalizeLineEndings(buffer: string, final = false): string {
 export async function runChatStream({
   payload,
   apiKey,
-  onChunk
+  onChunk,
+  timeoutMs
 }: RunChatStreamArgs): Promise<ChatStreamResult> {
   const { requestId, messages, baseUrl, model } = payload
   if (inflight.has(requestId)) return { ok: false, error: '请求 ID 已在使用' }
@@ -65,7 +67,10 @@ export async function runChatStream({
   }
 
   try {
-    armTimer(FIRST_CHUNK_TIMEOUT, '首包超时（连接或等待首段响应超过 30 秒）')
+    armTimer(
+      timeoutMs ?? FIRST_CHUNK_TIMEOUT,
+      '首包超时（连接或等待首段响应超过 30 秒）'
+    )
     const res = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -108,7 +113,7 @@ export async function runChatStream({
       const { done, value } = await reader.read()
       if (done) break
       if (!value?.length) continue
-      armTimer(IDLE_TIMEOUT, '响应超时（30 秒无新流数据）')
+      armTimer(timeoutMs ?? IDLE_TIMEOUT, '响应超时（30 秒无新流数据）')
       buffer += decoder.decode(value, { stream: true })
       buffer = normalizeLineEndings(buffer)
 

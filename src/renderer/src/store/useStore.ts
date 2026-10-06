@@ -15,6 +15,10 @@ import {
   MAX_TEXT_ATTACHMENTS_TOTAL_BYTES
 } from '@shared/chatLimits'
 import { resolveChatModel } from '@shared/chatModel'
+import { genMessageId } from '@shared/messageId'
+import { reportPersistenceFailure } from '../lib/reportPersistenceFailure'
+
+export { genMessageId } from '@shared/messageId'
 
 /** 会话级可编辑元信息 */
 export type SessionMeta = Partial<
@@ -29,7 +33,7 @@ function dbApi(): ElectronAPI | undefined {
 
 function persist(operation: Promise<unknown> | undefined, description: string): void {
   if (!operation) return
-  void operation.catch((error: unknown) => {
+  reportPersistenceFailure(operation, (error) => {
     console.error(`[SmartDream] ${description}持久化失败:`, error)
     useUIStore.setState({ persistenceError: true })
   })
@@ -460,7 +464,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
     const lang = useUIStore.getState().lang
     const startedAt = Date.now()
-    const assistantId = `a_${startedAt}`
+    const assistantId = genMessageId()
     const mode: TaskMode = sess.mode ?? 'agent'
     const history = [...sess.messages]
     const lastUserMessage = [...history].reverse().find((m) => m.role === 'user')
@@ -474,7 +478,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         MAX_TEXT_ATTACHMENTS_TOTAL_BYTES
     ) {
       get().addMessage(sessionId, {
-        id: `a_${startedAt}_attachment_limit`,
+        id: genMessageId(),
         role: 'assistant',
         content: translate(useUIStore.getState().lang, 'chatTextAttachmentLimit')
       })

@@ -17,10 +17,17 @@ import {
   ArrowUp
 } from 'lucide-react'
 import { SLASH_COMMANDS, MODELS } from '../data/mockData'
-import { useSessionStore, useUIStore, genAttachmentId, isValidSpaceName } from '../store/useStore'
+import {
+  useSessionStore,
+  useUIStore,
+  genAttachmentId,
+  genMessageId,
+  isValidSpaceName
+} from '../store/useStore'
 import { useT } from '../i18n'
 import type { I18nKey } from '../i18n'
 import type { Message, TaskMode, Attachment } from '../types'
+import { useShallow } from 'zustand/react/shallow'
 
 /** 超过该长度的粘贴文本自动压缩为 Chip（对齐 WorkBuddy：3000 字符） */
 const PASTE_CHIP_THRESHOLD = 3000
@@ -69,12 +76,22 @@ export default function CommandBar({ sessionId }: { sessionId: string }): JSX.El
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const t = useT()
 
-  const session = useSessionStore((s) => s.sessions.find((x) => x.id === sessionId))
-  const { updateSession, runAssistant, authorizeSessionWorkspace, authorizeSessionFile, createSpace } =
-    useSessionStore()
-  const mode: TaskMode = session?.mode ?? 'agent'
-  const modelId = session?.model ?? 'glm'
-  const workspaceDir = session?.workspace ?? null
+  const { mode, modelId, workspaceDir, running } = useSessionStore(
+    useShallow((s) => {
+      const session = s.sessions.find((item) => item.id === sessionId)
+      return {
+        mode: (session?.mode ?? 'agent') as TaskMode,
+        modelId: session?.model ?? 'glm',
+        workspaceDir: session?.workspace ?? null,
+        running: session?.status === 'running'
+      }
+    })
+  )
+  const updateSession = useSessionStore((s) => s.updateSession)
+  const runAssistant = useSessionStore((s) => s.runAssistant)
+  const authorizeSessionWorkspace = useSessionStore((s) => s.authorizeSessionWorkspace)
+  const authorizeSessionFile = useSessionStore((s) => s.authorizeSessionFile)
+  const createSpace = useSessionStore((s) => s.createSpace)
   const {
     pendingAttachments,
     addPendingAttachments,
@@ -143,7 +160,7 @@ export default function CommandBar({ sessionId }: { sessionId: string }): JSX.El
 
   const handleSend = (): void => {
     const text = input.trim()
-    if (!text || session?.status === 'running') return
+    if (!text || running) return
     if (text === '/clear') {
       useSessionStore.getState().clearMessages(sessionId)
       setInput('')
@@ -162,7 +179,7 @@ export default function CommandBar({ sessionId }: { sessionId: string }): JSX.El
       .filter((a) => a.kind === 'chip')
       .map((a) => a.preview ?? a.name)
     const userMsg: Message = {
-      id: `u_${Date.now()}`,
+      id: genMessageId(),
       role: 'user',
       content: text,
       attachments: attachments.length ? attachments : undefined,
@@ -551,7 +568,7 @@ export default function CommandBar({ sessionId }: { sessionId: string }): JSX.El
           {/* 圆形发送按钮 */}
           <button
             onClick={handleSend}
-            disabled={!input.trim() || session?.status === 'running'}
+            disabled={!input.trim() || running}
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
             title={t('cmdSend')}
           >

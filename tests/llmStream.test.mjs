@@ -146,6 +146,37 @@ test('user cancellation while waiting for response headers settles cleanly', asy
       apiKey: 'test-key',
       onChunk: () => {}
     })
+
+    test('times out when the server never sends response headers', async () => {
+      const originalFetch = globalThis.fetch
+      globalThis.fetch = (_url, { signal }) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener(
+            'abort',
+            () => reject(new DOMException('The operation was aborted', 'AbortError')),
+            { once: true }
+          )
+        })
+
+      try {
+        const result = await runChatStream({
+          payload: {
+            requestId: 'header-timeout-test',
+            messages: [{ role: 'user', content: 'hello' }],
+            baseUrl: 'https://api.example.test/v1',
+            model: 'test-model'
+          },
+          apiKey: 'test-key',
+          onChunk: () => {},
+          timeoutMs: 10
+        })
+        assert.equal(result.ok, false)
+        assert.match(result.error, /首包超时/)
+        assert.equal(result.aborted, false)
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
     await new Promise((resolve) => setTimeout(resolve, 20))
     abortChat('header-cancel-test')
     assert.deepEqual(await pending, { ok: false, error: '已中止', aborted: true })
