@@ -61,14 +61,15 @@ export interface StorageInfo {
 export const IPC = {
   getAppInfo: 'app:get-info',
   getStorageInfo: 'app:get-storage',
+  openDataDirectory: 'app:open-data-directory',
   readDirectory: 'fs:read-directory',
   readFile: 'fs:read-file',
   readFileAsDataUrl: 'fs:read-file-data-url',
-  writeFile: 'fs:write-file',
-  createFile: 'fs:create-file',
   getWorkspace: 'fs:get-workspace',
   selectAndAuthorizeDirectory: 'dialog:select-authorized-directory',
   selectAndAuthorizeFile: 'dialog:select-authorized-file',
+  reauthorizeDirectory: 'dialog:reauthorize-directory',
+  reauthorizeFile: 'dialog:reauthorize-file',
   selectWorkspaceRoot: 'dialog:select-workspace-root',
   createSpace: 'space:create',
   openPath: 'shell:open-path',
@@ -88,16 +89,11 @@ export const IPC = {
   apiKeyStatus: 'credentials:status',
   apiKeySet: 'credentials:set',
   apiKeyClear: 'credentials:clear',
+  apiBaseUrlSet: 'model-config:set-base-url',
   chatSend: 'chat:send',
   chatOnChunk: 'chat:on-chunk',
   chatAbort: 'chat:abort'
 } as const
-
-/** 写文件结果 */
-export interface WriteResult {
-  path: string
-  ok: boolean
-}
 
 // ---- 持久化（SQLite）载荷类型 ----
 
@@ -149,10 +145,17 @@ export interface ChatMessage {
 export interface ChatStreamPayload {
   /** 请求唯一标识：chunk 推送按它路由，abort 按它定位 AbortController */
   requestId: string
+  /** 当前会话 ID */
+  sessionId: string
+  /** 当前空间的授权范围；空间内多个任务共享目录读取权限 */
+  authorizationScope: string
   messages: ChatMessage[]
-  /** OpenAI 兼容基础端点（如 https://open.bigmodel.cn/api/paas/v4，无尾斜杠） */
-  baseUrl: string
   model: string
+}
+
+/** 由主进程补入已确认服务地址后，传给模型转发层的请求载荷 */
+export interface ModelChatStreamPayload extends ChatStreamPayload {
+  baseUrl: string
 }
 
 /** 流结束/失败时 chat:send 的 resolve 结果 */
@@ -183,26 +186,31 @@ export interface ElectronAPI {
   getAppInfo: () => Promise<AppInfo>
   /** 查询应用存储信息（缓存目录 + 占用 + 磁盘容量），设置弹窗「存储」区使用 */
   getStorageInfo: () => Promise<StorageInfo>
-  readDirectory: (dirPath: string) => Promise<DirectoryReadResult>
-  readFile: (filePath: string) => Promise<FileContent>
+  /** 仅打开应用自身的数据目录，不接受 renderer 指定路径 */
+  openDataDirectory: () => Promise<void>
+  readDirectory: (dirPath: string, scopeId?: string) => Promise<DirectoryReadResult>
+  readFile: (filePath: string, scopeId?: string) => Promise<FileContent>
   /** 读取文件为 data URL（用于图片等二进制预览），仅限已授权路径 */
-  readFileAsDataUrl: (filePath: string) => Promise<{ path: string; dataUrl: string }>
-  /** 写入文件内容（仅限已授权工作空间或沙箱工作区内） */
-  writeFile: (filePath: string, content: string) => Promise<WriteResult>
-  /** 在沙箱工作区或授权工作空间内创建新文件（不存在则创建空文件） */
-  createFile: (filePath: string) => Promise<WriteResult>
+  readFileAsDataUrl: (
+    filePath: string,
+    scopeId?: string
+  ) => Promise<{ path: string; dataUrl: string }>
   /** 查询当前工作空间授权状态与沙箱目录 */
-  getWorkspace: () => Promise<WorkspaceInfo>
+  getWorkspace: (scopeId?: string) => Promise<WorkspaceInfo>
   /** 通过系统目录选择器选择并授权工作空间，不能由 renderer 指定任意路径 */
-  selectAndAuthorizeDirectory: () => Promise<string | undefined>
+  selectAndAuthorizeDirectory: (sessionId: string) => Promise<string | undefined>
   /** 通过系统文件选择器选择并授权单文件，只允许读取该文件 */
-  selectAndAuthorizeFile: () => Promise<string | undefined>
+  selectAndAuthorizeFile: (sessionId: string) => Promise<string | undefined>
+  /** 重新授权历史文件夹；主进程会拒绝与原路径不同的选择 */
+  reauthorizeDirectory: (sessionId: string, expectedPath: string) => Promise<string | undefined>
+  /** 重新授权历史文件；主进程会拒绝与原路径不同的选择 */
+  reauthorizeFile: (sessionId: string, expectedPath: string) => Promise<string | undefined>
   /** 通过系统目录选择器设置本次运行的默认空间根目录 */
   selectWorkspaceRoot: () => Promise<string | undefined>
   /** 在主进程管理的空间根目录中创建空间，不接受 renderer 提供的路径 */
   createSpace: (name: string) => Promise<string>
-  openPath: (path: string) => Promise<void>
-  showInFolder: (path: string) => Promise<void>
+  openPath: (path: string, scopeId?: string) => Promise<void>
+  showInFolder: (path: string, scopeId?: string) => Promise<void>
   windowMinimize: () => void
   windowMaximize: () => void
   windowClose: () => void
@@ -231,6 +239,8 @@ export interface ElectronAPI {
   setApiKey: (value: string) => Promise<ApiKeyStatus>
   /** 清除已保存 API Key */
   clearApiKey: () => Promise<ApiKeyStatus>
+  /** 更新经主进程确认并持久化的模型服务地址 */
+  setApiBaseUrl: (baseUrl: string) => Promise<string>
   /**
    * 获取拖拽文件在磁盘上的绝对路径（webUtils.getPathForFile）。
    * Electron 32+ 已移除 DOM File.path 属性，拖拽附件必须走此方法；

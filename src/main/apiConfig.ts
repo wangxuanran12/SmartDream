@@ -5,9 +5,10 @@ export function normalizeApiBaseUrl(value: unknown, allowLocalHttp: boolean): st
     throw new Error('API 基础端点不能为空')
   }
 
+  const trimmed = value.trim()
   let url: URL
   try {
-    url = new URL(value.trim())
+    url = new URL(trimmed)
   } catch {
     throw new Error('API 基础端点格式无效')
   }
@@ -16,13 +17,22 @@ export function normalizeApiBaseUrl(value: unknown, allowLocalHttp: boolean): st
     throw new Error('API 基础端点不能包含用户名或密码')
   }
 
+  if (url.search || url.hash) {
+    throw new Error('API 基础端点不能包含查询参数或哈希片段')
+  }
+
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('API 基础端点只能使用 http:// 或 https://')
+  }
+
   if (url.protocol !== 'https:') {
-    const isAllowedLocalHttp =
-      allowLocalHttp && url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname.toLowerCase())
+    const hostname = url.hostname.toLowerCase()
+    const isAllowedLocalHttp = allowLocalHttp && url.protocol === 'http:' && LOOPBACK_HOSTS.has(hostname)
     if (!isAllowedLocalHttp) {
       throw new Error('远程 API 必须使用 HTTPS；本地 HTTP 仅可在显式启用调试时使用')
     }
   }
 
-  return url.toString().replace(/\/+$/, '')
+  const normalizedPath = url.pathname === '/' ? '' : url.pathname.replace(/\/+$/, '')
+  return `${url.origin}${normalizedPath}`
 }

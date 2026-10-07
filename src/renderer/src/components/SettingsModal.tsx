@@ -221,6 +221,8 @@ function ModelServiceSection(): JSX.Element {
   const [apiKeyInput, setApiKeyInput] = useState('')
   const [baseUrlDraft, setBaseUrlDraft] = useState(apiBaseUrl)
   const [keyActionError, setKeyActionError] = useState('')
+  const [baseUrlError, setBaseUrlError] = useState('')
+  const [baseUrlPending, setBaseUrlPending] = useState(false)
   const [keyActionPending, setKeyActionPending] = useState(false)
   const [showKey, setShowKey] = useState(false)
   useEffect(() => setBaseUrlDraft(apiBaseUrl), [apiBaseUrl])
@@ -255,14 +257,19 @@ function ModelServiceSection(): JSX.Element {
       setKeyActionPending(false)
     }
   }
-  const commitBaseUrl = (): void => {
+  const commitBaseUrl = async (): Promise<void> => {
     const next = baseUrlDraft.trim().replace(/\/+$/, '')
-    if (!next || next === apiBaseUrl) return
-    if (apiKeyConfigured && !window.confirm(t('apiEndpointKeyWarning'))) {
+    if (!next || next === apiBaseUrl || baseUrlPending) return
+    setBaseUrlPending(true)
+    setBaseUrlError('')
+    try {
+      await setApiConfig({ apiBaseUrl: next })
+    } catch (error) {
       setBaseUrlDraft(apiBaseUrl)
-      return
+      setBaseUrlError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setBaseUrlPending(false)
     }
-    setApiConfig({ apiBaseUrl: next })
   }
   return (
     <Card>
@@ -324,10 +331,11 @@ function ModelServiceSection(): JSX.Element {
         <input
           type="text"
           value={apiModel}
-          onChange={(e) => setApiConfig({ apiModel: e.target.value })}
+          onChange={(e) => void setApiConfig({ apiModel: e.target.value })}
           className={inputCls}
         />
       </Row>
+      {baseUrlError && <div role="alert" className="text-[11px] text-red-400">{baseUrlError}</div>}
     </Card>
   )
 }
@@ -338,6 +346,7 @@ function StorageSection(): JSX.Element {
   const workspaceRoot = useUIStore((s) => s.workspaceRoot)
   const setWorkspaceRoot = useUIStore((s) => s.setWorkspaceRoot)
   const [info, setInfo] = useState<StorageInfo | null>(null)
+  const [storageError, setStorageError] = useState('')
 
   const load = (): void => {
     // 防御：preload 未更新（旧构建无 getStorageInfo）时静默跳过，避免整树崩溃白屏
@@ -345,8 +354,14 @@ function StorageSection(): JSX.Element {
     if (!api || typeof api.getStorageInfo !== 'function') return
     api
       .getStorageInfo()
-      .then(setInfo)
-      .catch(() => {})
+      .then((storageInfo) => {
+        setInfo(storageInfo)
+        setStorageError('')
+      })
+      .catch((error: unknown) => {
+        console.error('[SmartDream] 读取存储信息失败:', error)
+        setStorageError(error instanceof Error ? error.message : String(error))
+      })
   }
   useEffect(() => {
     load()
@@ -385,7 +400,12 @@ function StorageSection(): JSX.Element {
             <button
               onClick={() => {
                 const api = window.electronAPI
-                if (info && api && typeof api.openPath === 'function') api.openPath(info.cacheDir)
+                if (info && api) {
+                  void api.openDataDirectory().catch((error: unknown) => {
+                    console.error('[SmartDream] 打开应用数据目录失败:', error)
+                    setStorageError(error instanceof Error ? error.message : String(error))
+                  })
+                }
               }}
               className="flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1.5 text-[13px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
             >
@@ -393,6 +413,7 @@ function StorageSection(): JSX.Element {
               {t('openDirectory')}
             </button>
           </div>
+          {storageError && <div role="alert" className="mt-2 text-[11px] text-red-400">{storageError}</div>}
           {/* 占用条：系统缓存 / 磁盘已用 / 磁盘可用 */}
           <div className="mt-4 flex h-1.5 w-full overflow-hidden rounded-full bg-surface-hover">
             <div className="h-full bg-neutral-600" style={{ width: pct(cache) }} />

@@ -1,5 +1,5 @@
 {
-  "name": "ai-agent-demo",
+  "name": "smartdream",
   "version": "1.1.10",
   "description": "AI 编程助手桌面应用 Demo（Electron + React + TypeScript），复刻 Codex / WorkBuddy 界面",
   "main": "./out/main/index.js",

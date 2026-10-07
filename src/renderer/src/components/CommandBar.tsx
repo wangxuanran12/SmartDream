@@ -325,7 +325,9 @@ export default function CommandBar({ sessionId }: { sessionId: string }): JSX.El
                       .then((result) => {
                         if (result) setPreviewVisible(true)
                       })
-                      .catch(() => {})
+                      .catch((error: unknown) => {
+                        console.error('[SmartDream] 选择工作文件夹失败:', error)
+                      })
                     setToolMenu(null)
                   }}
                   className="flex cursor-pointer items-center gap-2.5 px-3 py-2 text-text-secondary hover:bg-surface-hover"
@@ -343,7 +345,9 @@ export default function CommandBar({ sessionId }: { sessionId: string }): JSX.El
                       .then((result) => {
                         if (result) setPreviewVisible(true)
                       })
-                      .catch(() => {})
+                      .catch((error: unknown) => {
+                        console.error('[SmartDream] 选择授权文件失败:', error)
+                      })
                     setToolMenu(null)
                   }}
                   className="flex cursor-pointer items-center gap-2.5 px-3 py-2 text-text-secondary hover:bg-surface-hover"

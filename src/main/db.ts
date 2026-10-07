@@ -1,5 +1,5 @@
 // SQLite 持久化（node:sqlite 内置模块，主进程单写者）
-// - DB 位于应用数据目录 workbuddy.db，WAL 模式
+// - DB 位于应用数据目录 smartdream.db，WAL 模式；旧 workbuddy.db 会非破坏性迁移
 // - 加载/迁移失败时自动备份损坏文件并重建；再失败则降级为纯内存态
 // - 渲染进程通过 db:* IPC 通道访问，本模块是唯一写入方
 // - 使用 Node 内置 node:sqlite（无原生二进制依赖），macOS/Windows/Linux 打包行为一致
@@ -16,6 +16,7 @@ import {
   type DbSnapshot
 } from '../shared/types'
 import { assertPublicSettingsPatch, decodePublicSettings } from './settingsSecurity'
+import { migrateLegacyDatabaseFile } from './databaseMigration'
 
 const SCHEMA_VERSION = 1
 
@@ -98,7 +99,17 @@ function withTransaction<T>(fn: () => T): T {
 
 /** 初始化数据库；失败时备份损坏文件重建一次；仍失败返回 false（纯内存降级） */
 export function initDb(): boolean {
-  const dbPath = join(app.getPath('userData'), 'workbuddy.db')
+  const userDataDir = app.getPath('userData')
+  const dbPath = join(userDataDir, 'smartdream.db')
+  try {
+    if (migrateLegacyDatabaseFile(dbPath, join(userDataDir, 'workbuddy.db'))) {
+      console.info('[db] 已将 workbuddy.db 迁移为 smartdream.db；旧数据库保留。')
+    }
+  } catch (error) {
+    console.error('[db] 旧数据库迁移失败，保留旧文件并进入未持久化模式:', error)
+    db = null
+    return false
+  }
   try {
     db = openAndMigrate(dbPath)
     normalizeStatuses()
@@ -276,7 +287,7 @@ const upsertTaskStmt = `
 `
 
 export function upsertSession(s: SessionPayload): void {
-  if (!db) return
+  if (!db) throw new Error('SQLite 数据库未就绪，数据未保存')
   db.prepare(upsertTaskStmt).run({
     id: s.id,
     title: s.title,
@@ -291,12 +302,12 @@ export function upsertSession(s: SessionPayload): void {
 }
 
 export function deleteSession(id: string): void {
-  if (!db) return
+  if (!db) throw new Error('SQLite 数据库未就绪，数据未保存')
   db.prepare('DELETE FROM tasks WHERE id = ?').run(id) // 消息经 FK CASCADE 级联删除
 }
 
 export function upsertMessage(m: MessagePayload): void {
-  if (!db) return
+  if (!db) throw new Error('SQLite 数据库未就绪，数据未保存')
   db.prepare(upsertMessageStmt).run({
     id: m.id,
     taskId: m.taskId,
@@ -318,7 +329,7 @@ const upsertMessageStmt = `
 `
 
 export function replaceMessages(taskId: string, messages: MessagePayload[]): void {
-  if (!db) return
+  if (!db) throw new Error('SQLite 数据库未就绪，数据未保存')
   withTransaction(() => {
     db!.prepare('DELETE FROM messages WHERE task_id = ?').run(taskId)
     const stmt = db!.prepare(upsertMessageStmt)
@@ -337,7 +348,7 @@ export function replaceMessages(taskId: string, messages: MessagePayload[]): voi
 
 export function upsertSettings(patch: SettingsPatch): void {
   assertPublicSettingsPatch(patch)
-  if (!db) return
+  if (!db) throw new Error('SQLite 数据库未就绪，数据未保存')
   const stmt = db.prepare(
     `INSERT INTO app_settings (key, value) VALUES (?, ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`
@@ -353,8 +364,18 @@ export function upsertSettings(patch: SettingsPatch): void {
   })
 }
 
+export function upsertApiBaseUrl(baseUrl: string): void {
+  if (!db) throw new Error('SQLite 数据库未就绪，模型服务地址未保存')
+  withTransaction(() => {
+    db!.prepare(
+      `INSERT INTO app_settings (key, value) VALUES ('apiBaseUrl', ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+    ).run(JSON.stringify(baseUrl))
+  })
+}
+
 export function upsertUser(user: UserPayload): void {
-  if (!db) return
+  if (!db) throw new Error('SQLite 数据库未就绪，数据未保存')
   db.prepare(
     `INSERT INTO users (id, name, plan, created_at) VALUES (1, @name, @plan, @createdAt)
      ON CONFLICT(id) DO UPDATE SET name = excluded.name, plan = excluded.plan`
@@ -372,13 +393,13 @@ function normalizeStatuses(): void {
 /** 注册 db:* IPC 通道（需在 app.whenReady 之后调用；DB 未就绪时静默吞掉调用，渲染进程自行降级） */
 export function registerDbHandlers(): void {
   ipcMain.handle(IPC.dbLoad, () => (db ? getSnapshot() : null))
-  ipcMain.handle(IPC.dbSessionUpsert, (_e, s: SessionPayload) => db && upsertSession(s))
-  ipcMain.handle(IPC.dbSessionDelete, (_e, id: string) => db && deleteSession(id))
-  ipcMain.handle(IPC.dbMessageUpsert, (_e, m: MessagePayload) => db && upsertMessage(m))
+  ipcMain.handle(IPC.dbSessionUpsert, (_e, s: SessionPayload) => upsertSession(s))
+  ipcMain.handle(IPC.dbSessionDelete, (_e, id: string) => deleteSession(id))
+  ipcMain.handle(IPC.dbMessageUpsert, (_e, m: MessagePayload) => upsertMessage(m))
   ipcMain.handle(
     IPC.dbMessagesReplace,
-    (_e, taskId: string, msgs: MessagePayload[]) => db && replaceMessages(taskId, msgs)
+    (_e, taskId: string, msgs: MessagePayload[]) => replaceMessages(taskId, msgs)
   )
-  ipcMain.handle(IPC.dbSettingsUpsert, (_e, patch: SettingsPatch) => db && upsertSettings(patch))
-  ipcMain.handle(IPC.dbUserUpsert, (_e, u: UserPayload) => db && upsertUser(u))
+  ipcMain.handle(IPC.dbSettingsUpsert, (_e, patch: SettingsPatch) => upsertSettings(patch))
+  ipcMain.handle(IPC.dbUserUpsert, (_e, u: UserPayload) => upsertUser(u))
 }

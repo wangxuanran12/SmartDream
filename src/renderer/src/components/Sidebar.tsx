@@ -226,7 +226,9 @@ export default function Sidebar(): JSX.Element {
         setCopied(true)
         setTimeout(() => setCopied(false), 1500)
       })
-      .catch(() => {})
+      .catch((error: unknown) => {
+        console.warn('[SmartDream] 复制用户名失败:', error)
+      })
   }
 
   // Esc 关闭用户菜单
@@ -243,7 +245,9 @@ export default function Sidebar(): JSX.Element {
     window.electronAPI
       ?.getAppInfo()
       .then((info) => setAppVersion(info.appVersion))
-      .catch(() => {})
+      .catch((error: unknown) => {
+        console.warn('[SmartDream] 读取应用信息失败:', error)
+      })
   }, [])
 
   // 新建任务：仅创建会话，初始不绑定工作空间（可后续通过 + 菜单设置）
