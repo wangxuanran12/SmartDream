@@ -43,7 +43,7 @@ npm ci
 npm run dev
 ```
 
-应用可在设置中配置 API Key、Base URL 和模型 ID；聊天请求优先使用这里配置的模型 ID，不会被会话中的模型菜单标识覆盖。API Key 由主进程管理并优先存入系统安全存储；请勿将其提交到代码仓库。
+应用可在设置中配置 API Key、Base URL 和模型 ID；更换 Base URL 必须通过主进程显示的系统确认框，聊天请求不会接受 renderer 提供的服务地址。API Key 由主进程管理并优先存入系统安全存储；请勿将其提交到代码仓库。
 
 ## ✅ 检查与测试
 
@@ -70,6 +70,8 @@ npm run build:unpack
 
 打包产物输出到 `release/` 目录。
 
+为兼容已有安装的原位升级，electron-builder 的 `appId` 暂保留为 `com.demo.ai-agent`；包名和数据库文件已使用 SmartDream 命名。
+
 ## 🏗 项目结构
 
 ```
@@ -95,13 +97,15 @@ npm run build:unpack
 
 ## 🔌 IPC 与安全
 
-渲染进程没有直接的 Node.js 文件系统能力，通过 `preload` 暴露的白名单 API 请求主进程操作；主进程对文件路径再次执行真实路径及本次运行授权校验。UI 中的权限选项不是文件写入/命令执行沙箱：当前 Agent 不具备本地文件修改或命令执行工具。更多细节见 [`docs/技术说明.md`](docs/技术说明.md)。
+渲染进程没有直接的 Node.js 文件系统能力，通过 `preload` 暴露的白名单 API 请求主进程操作；主进程对文件路径再次执行真实路径及本次运行授权校验。任务会保留空间目录和文件引用的历史路径，但重启后不会自动恢复访问权；从「文件」页重新授权文件夹时必须选择原路径。目录读取授权按空间隔离，单文件授权按任务隔离。renderer 不暴露普通文件创建或写入 API。UI 中的权限选项不是命令执行沙箱：当前 Agent 不具备本地文件修改或命令执行工具。更多细节见 [`docs/技术说明.md`](docs/技术说明.md)。
 
 ## 💾 本地数据
 
-普通安装使用当前用户的系统应用数据目录下 `SmartDream/`（macOS 通常为 `~/Library/Application Support/SmartDream/`，Windows 通常为 `%APPDATA%\\SmartDream\\`），不再写入安装目录。升级后首次启动会把旧安装目录旁的 `SmartDream/` 数据复制到新位置；复制不删除旧目录，也不覆盖目标中已有文件，发生冲突时会提示。`WORKBUDDY_DATA_DIR` 仅供测试/自动化显式覆盖数据目录，设置后跳过迁移，不是便携模式。
+普通安装使用当前用户的系统应用数据目录下 `SmartDream/`（macOS 通常为 `~/Library/Application Support/SmartDream/`，Windows 通常为 `%APPDATA%\\SmartDream\\`），不再写入安装目录。升级后首次启动会把旧安装目录旁的 `SmartDream/` 数据复制到新位置；复制不删除旧目录，也不覆盖目标中已有文件，发生冲突时会提示。`SMARTDREAM_DATA_DIR` 可用于测试/自动化显式覆盖数据目录，设置后跳过迁移；旧环境变量 `WORKBUDDY_DATA_DIR` 暂时保留为兼容别名，不是便携模式。旧数据库 `workbuddy.db` 会复制迁移为 `smartdream.db`，原文件保留。
 
-API Key 由主进程管理，优先使用系统安全存储；若当前平台无法安全持久化，新输入的 Key 仅在本次运行有效。旧版数据库副本中的明文 Key 会尝试迁移到安全存储；安全存储不可用时会从新目录副本删除并提示重新录入。旧数据目录保留原样，可能仍含旧版明文 Key；确认新数据和密钥状态后，如需彻底删除旧副本，请手动移除旧目录。
+API Key 由主进程管理，优先使用系统安全存储；若当前平台无法安全持久化，新输入的 Key 仅在本次运行有效。旧版数据库副本中的明文 Key 会尝试迁移到安全存储；安全存储不可用时会从新目录副本删除并提示重新录入。旧数据目录与原 `workbuddy.db` 保留，可能仍含旧版明文 Key；确认新数据和密钥状态后，如需彻底删除旧副本，请手动移除旧目录。
+
+更改本地调试 HTTP 服务的环境变量为 `SMARTDREAM_ALLOW_LOCAL_LLM_HTTP=1`；旧变量 `WORKBUDDY_ALLOW_LOCAL_LLM_HTTP=1` 暂时作为兼容别名。
 
 ## 🔄 架构说明
 

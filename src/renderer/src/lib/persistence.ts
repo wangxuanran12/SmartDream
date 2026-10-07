@@ -6,10 +6,6 @@ import type { Message, Role, Session, TaskMode, TaskStatus } from '../types'
 import {
   INITIAL_SESSIONS,
   DEMO_SPACE_NAME,
-  DEMO_SYNC_FILENAME,
-  DEMO_SYNC_SCRIPT,
-  DEMO_SCRIPT_DOC_FILENAME,
-  DEMO_SCRIPT_DOC,
   PROJECT_DOCS_SPACE_NAME,
   buildDemoSpaceSession,
   buildProjectDocsSpaceSession
@@ -24,6 +20,11 @@ import {
 } from '../store/useStore'
 import type { PermissionMode, PreviewTab, AppLang, UiScale } from '../store/useStore'
 import { initializeOnce } from './initializeOnce'
+
+function reportStartupPersistenceFailure(error: unknown, operation: string): void {
+  console.error(`[SmartDream] ${operation}持久化失败:`, error)
+  useUIStore.setState({ persistenceError: true })
+}
 
 function toMessage(p: MessagePayload): Message {
   let meta: Partial<Message> = {}
@@ -97,11 +98,6 @@ async function seedInitialSessions(api: NonNullable<Window['electronAPI']>): Pro
     const wsRoot = typeof info?.workspaceRoot === 'string' ? info.workspaceRoot : ''
     if (wsRoot && typeof api.createSpace === 'function') {
       const demoDir = await api.createSpace(DEMO_SPACE_NAME)
-      if (typeof api.writeFile === 'function') {
-        await api.writeFile(`${demoDir}/${DEMO_SYNC_FILENAME}`, DEMO_SYNC_SCRIPT)
-        // 空间内置脚本说明：描述 fileSync.js 的功能 / 使用 / 配置
-        await api.writeFile(`${demoDir}/${DEMO_SCRIPT_DOC_FILENAME}`, DEMO_SCRIPT_DOC)
-      }
       sessions.push(buildDemoSpaceSession(demoDir))
       // 内置「项目说明」空间：space:create 自动播种功能/技术两份说明文档（空间同名时文档位于空间根目录）
       const projDir = await api.createSpace(PROJECT_DOCS_SPACE_NAME)
@@ -109,16 +105,16 @@ async function seedInitialSessions(api: NonNullable<Window['electronAPI']>): Pro
       // 标记内置空间已初始化：此后删除不复活（与 testDemo 行为一致）
       await api.dbSettingsUpsert({ projectSpaceSeeded: true })
     }
-  } catch {
-    // 示例空间创建失败不阻塞种子写入
+  } catch (error) {
+    reportStartupPersistenceFailure(error, '初始化示例空间')
   }
 
   for (const s of sessions) {
     try {
       await api.dbSessionUpsert(toSessionPayload(s))
       await api.dbMessagesReplace(s.id, s.messages.map((m) => toMessagePayload(s.id, m)))
-    } catch {
-      // 种子写入失败不阻塞启动
+    } catch (error) {
+      reportStartupPersistenceFailure(error, `写入示例会话「${s.title}」`)
     }
   }
   useSessionStore.setState({
@@ -157,10 +153,11 @@ async function ensureProjectDocsSpace(api: NonNullable<Window['electronAPI']>): 
     const dir = await api.createSpace(PROJECT_DOCS_SPACE_NAME)
     const s = buildProjectDocsSpaceSession(dir)
     useSessionStore.setState((st) => ({ sessions: [s, ...st.sessions] }))
-    await api.dbSessionUpsert(toSessionPayload(s)).catch(() => {})
-    await api.dbSettingsUpsert({ projectSpaceSeeded: true }).catch(() => {})
+    await api.dbSessionUpsert(toSessionPayload(s))
+    await api.dbSettingsUpsert({ projectSpaceSeeded: true })
   } catch (err) {
     console.warn('[SmartDream] 初始化「项目说明」空间失败:', err)
+    reportStartupPersistenceFailure(err, '初始化项目说明空间')
   }
 }
 
@@ -174,17 +171,25 @@ async function hydrateOnce(): Promise<void> {
 
   try {
     useUIStore.getState().setApiKeyStatus(await api.getApiKeyStatus())
-  } catch {
+  } catch (error) {
+    console.error('[SmartDream] 读取 API Key 状态失败:', error)
     // Keep the default unconfigured state if the credential IPC is unavailable.
   }
 
   let snap: DbSnapshot | null
   try {
     snap = await api.dbLoad()
-  } catch {
+  } catch (error) {
+    reportStartupPersistenceFailure(error, '加载本地数据')
     return
   }
-  if (!snap) return // DB 降级态（主进程 initDb 失败）
+  if (!snap) {
+    reportStartupPersistenceFailure(
+      new Error('SQLite 数据库不可用，会话更改不会持久保存'),
+      '加载本地数据'
+    )
+    return
+  }
 
   if (snap.sessions.length === 0) {
     await seedInitialSessions(api)

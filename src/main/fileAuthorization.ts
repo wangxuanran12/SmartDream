@@ -14,6 +14,14 @@ export function isWithinPath(
   return rel === '' || (!absolute && rel !== '..' && !rel.startsWith(`..${separator}`))
 }
 
+export function isSamePath(
+  first: string,
+  second: string,
+  pathFlavor: 'native' | 'win32' = 'native'
+): boolean {
+  return isWithinPath(first, second, pathFlavor) && isWithinPath(second, first, pathFlavor)
+}
+
 export async function canonicalizePath(input: unknown, allowMissing = false): Promise<string> {
   if (typeof input !== 'string' || !input || !isAbsolute(input)) {
     throw new Error('无效的文件系统路径')
@@ -41,6 +49,8 @@ export class FileAuthorization {
   private sandboxDir = ''
   private readonly authorizedDirs = new Set<string>()
   private readonly authorizedFiles = new Set<string>()
+  private readonly scopedDirs = new Map<string, Set<string>>()
+  private readonly scopedFiles = new Map<string, Set<string>>()
 
   async initializeSandbox(path: string, managedRoot = dirname(path)): Promise<string> {
     const [canonicalSandbox, canonicalRoot] = await Promise.all([
@@ -54,47 +64,70 @@ export class FileAuthorization {
     return canonicalSandbox
   }
 
-  getAuthorizedDirs(): string[] {
-    return [...this.authorizedDirs]
+  getAuthorizedDirs(scopeId?: string): string[] {
+    const scoped = scopeId ? this.scopedDirs.get(scopeId) ?? [] : []
+    return [...new Set([...this.authorizedDirs, ...scoped])]
   }
 
-  getAuthorizedFiles(): string[] {
-    return [...this.authorizedFiles]
+  getAuthorizedFiles(scopeId?: string): string[] {
+    const scoped = scopeId ? this.scopedFiles.get(scopeId) ?? [] : []
+    return [...new Set([...this.authorizedFiles, ...scoped])]
   }
 
-  async authorizeDirectory(path: unknown): Promise<string> {
+  async authorizeDirectory(path: unknown, scopeId?: string): Promise<string> {
     const canonical = await canonicalizePath(path)
     if (!(await stat(canonical)).isDirectory()) {
       throw new Error('所选路径不是目录')
     }
-    this.authorizedDirs.add(canonical)
+    if (scopeId) {
+      const paths = this.scopedDirs.get(scopeId) ?? new Set<string>()
+      paths.add(canonical)
+      this.scopedDirs.set(scopeId, paths)
+    } else {
+      this.authorizedDirs.add(canonical)
+    }
     return canonical
   }
 
-  async authorizeFile(path: unknown): Promise<string> {
+  async authorizeFile(path: unknown, scopeId?: string): Promise<string> {
     const canonical = await canonicalizePath(path)
     if (!(await stat(canonical)).isFile()) {
       throw new Error('所选路径不是普通文件')
     }
-    this.authorizedFiles.add(canonical)
+    if (scopeId) {
+      const paths = this.scopedFiles.get(scopeId) ?? new Set<string>()
+      paths.add(canonical)
+      this.scopedFiles.set(scopeId, paths)
+    } else {
+      this.authorizedFiles.add(canonical)
+    }
     return canonical
   }
 
   async resolveAuthorizedPath(
     path: unknown,
     mode: FileAccessMode,
-    allowMissing = false
+    allowMissing = false,
+    scopeId?: string
   ): Promise<string> {
     const canonical = await canonicalizePath(path, allowMissing)
-    if (!this.isAuthorizedCanonicalPath(canonical, mode)) {
+    if (!this.isAuthorizedCanonicalPath(canonical, mode, scopeId)) {
       throw new Error('拒绝访问：该路径未经授权')
     }
     return canonical
   }
 
-  isAuthorizedCanonicalPath(path: string, mode: FileAccessMode): boolean {
-    const roots = [this.sandboxDir, ...this.authorizedDirs].filter(Boolean)
+  isAuthorizedCanonicalPath(path: string, mode: FileAccessMode, scopeId?: string): boolean {
+    const roots = [
+      this.sandboxDir,
+      ...this.authorizedDirs,
+      ...(scopeId ? this.scopedDirs.get(scopeId) ?? [] : [])
+    ].filter(Boolean)
     if (roots.some((root) => isWithinPath(root, path))) return true
-    return mode === 'read' && this.authorizedFiles.has(path)
+    if (mode !== 'read') return false
+    return (
+      this.authorizedFiles.has(path) ||
+      (scopeId !== undefined && (this.scopedFiles.get(scopeId)?.has(path) ?? false))
+    )
   }
 }

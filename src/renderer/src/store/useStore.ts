@@ -16,6 +16,7 @@ import {
 } from '@shared/chatLimits'
 import { resolveChatModel } from '@shared/chatModel'
 import { genMessageId } from '@shared/messageId'
+import { DEFAULT_API_BASE_URL, DEFAULT_API_MODEL } from '@shared/modelDefaults'
 import { reportPersistenceFailure } from '../lib/reportPersistenceFailure'
 
 export { genMessageId } from '@shared/messageId'
@@ -120,11 +121,15 @@ interface SessionState {
    * 返回授权目录路径（取消时为 null）。
    */
   authorizeSessionWorkspace: (sessionId: string) => Promise<string | null>
+  /** 重新授权会话已有的文件夹，主进程强制要求选择路径与历史记录一致。 */
+  reauthorizeSessionWorkspace: (sessionId: string) => Promise<string | null>
   /**
    * 会话级授权：弹窗选择单个文件 → 用户确认 → 写回当前会话的 authorizedFile。
    * 返回授权文件路径（取消时为 null）。
    */
   authorizeSessionFile: (sessionId: string) => Promise<string | null>
+  /** 重新授权会话已有的单个文件，主进程强制要求选择路径与历史记录一致。 */
+  reauthorizeSessionFile: (sessionId: string) => Promise<string | null>
   /**
    * 新建空间：在默认空间存储路径（workspaceRoot）下创建同名文件夹并授权，
    * 同时新建任务绑定该空间（或绑定指定会话）。返回空间目录路径（失败时为 null）。
@@ -151,9 +156,6 @@ export function isValidSpaceName(name: string): boolean {
 // ---- AI 回复生成（真实 API 优先 / 动态 mock 兜底） ----
 
 /** 模型服务默认值（设置弹窗「通用 → 模型服务」可改） */
-export const DEFAULT_API_BASE_URL = 'https://open.bigmodel.cn/api/paas/v4'
-export const DEFAULT_API_MODEL = 'glm-4.6'
-
 /** 各工作模式的 system 提示词（真实 API 时注入） */
 const SYSTEM_PROMPTS: Record<TaskMode, string> = {
   agent:
@@ -177,7 +179,7 @@ const PROJECT_DOCS_DIRNAME = '项目说明'
 /**
  * 内置「项目说明」空间的两份文档位于空间根目录；普通工作空间不尝试读取。
  */
-async function readProjectDocs(workspace?: string): Promise<ProjectDocs | null> {
+async function readProjectDocs(workspace: string | undefined, scopeId: string): Promise<ProjectDocs | null> {
   if (!workspace) return null
   const normalized = workspace.replace(/[\\/]+$/, '')
   if (normalized.split(/[\\/]/).pop() !== PROJECT_DOCS_DIRNAME) return null
@@ -185,8 +187,8 @@ async function readProjectDocs(workspace?: string): Promise<ProjectDocs | null> 
   if (!api || typeof api.readFile !== 'function') return null
   try {
     const [feature, tech] = await Promise.all([
-      api.readFile(`${normalized}/功能说明.md`).then((r) => r.content),
-      api.readFile(`${normalized}/技术说明.md`).then((r) => r.content)
+      api.readFile(`${normalized}/功能说明.md`, scopeId).then((r) => r.content),
+      api.readFile(`${normalized}/技术说明.md`, scopeId).then((r) => r.content)
     ])
     return { feature, tech }
   } catch (error) {
@@ -405,7 +407,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   authorizeSessionWorkspace: async (sessionId) => {
     if (!window.electronAPI) return null
     try {
-      const dir = await window.electronAPI.selectAndAuthorizeDirectory()
+      const dir = await window.electronAPI.selectAndAuthorizeDirectory(sessionId)
       if (!dir) return null // 用户取消
       get().updateSession(sessionId, { workspace: dir, authorizedFile: undefined })
       return dir
@@ -415,17 +417,39 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
+  reauthorizeSessionWorkspace: async (sessionId) => {
+    const session = get().sessions.find((item) => item.id === sessionId)
+    if (!session?.workspace || !window.electronAPI) return null
+    try {
+      return (await window.electronAPI.reauthorizeDirectory(sessionId, session.workspace)) ?? null
+    } catch (err) {
+      console.warn('[SmartDream] 文件夹重新授权失败:', err)
+      throw err
+    }
+  },
+
   // 单文件授权也由主进程完成选择和登记，仅授予该文件的读取权限。
   authorizeSessionFile: async (sessionId) => {
     if (!window.electronAPI) return null
     try {
-      const file = await window.electronAPI.selectAndAuthorizeFile()
+      const file = await window.electronAPI.selectAndAuthorizeFile(sessionId)
       if (!file) return null // 用户取消
       get().updateSession(sessionId, { workspace: undefined, authorizedFile: file })
       return file
     } catch (err) {
       console.warn('[SmartDream] 单文件授权失败:', err)
       return null
+    }
+  },
+
+  reauthorizeSessionFile: async (sessionId) => {
+    const session = get().sessions.find((item) => item.id === sessionId)
+    if (!session?.authorizedFile || !window.electronAPI) return null
+    try {
+      return (await window.electronAPI.reauthorizeFile(sessionId, session.authorizedFile)) ?? null
+    } catch (err) {
+      console.warn('[SmartDream] 文件重新授权失败:', err)
+      throw err
     }
   },
 
@@ -522,7 +546,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
     // 空间内置项目说明：会话绑定工作空间且存在「项目说明」文档时读取（真实 API 注入 system 上下文、
     // Mock 按提问复述文档内容）。读取为本地 IPC 耗时极短；期间被新发送中止则放弃本次回复。
-    void readProjectDocs(sess.workspace).then((projectDocsResult) => {
+    void readProjectDocs(sess.workspace, sess.workspace ?? sessionId).then((projectDocsResult) => {
       if (token.settled) return
       const docsError = projectDocsResult?.error
       const projectDocs = docsError ? null : projectDocsResult
@@ -590,8 +614,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         const stream = api!.chatStream(
           {
             requestId,
+            sessionId,
+            authorizationScope: sess.workspace ?? sessionId,
             messages: chatMessages,
-            baseUrl: (ui.apiBaseUrl || DEFAULT_API_BASE_URL).replace(/\/+$/, ''),
             model: resolveChatModel(sess.model, ui.apiModel, DEFAULT_API_MODEL)
           },
           append
@@ -719,7 +744,7 @@ interface UIState {
   /** 模型 ID */
   apiModel: string
   /** 更新模型服务配置（去尾斜杠 / 防抖落库） */
-  setApiConfig: (patch: Partial<Pick<UIState, 'apiBaseUrl' | 'apiModel'>>) => void
+  setApiConfig: (patch: Partial<Pick<UIState, 'apiBaseUrl' | 'apiModel'>>) => Promise<void>
   setApiKeyStatus: (status: ApiKeyStatus) => void
   dismissPersistenceError: () => void
   sidebarCollapsed: boolean
@@ -822,15 +847,22 @@ export const useUIStore = create<UIState>((set) => ({
     set({ workspaceRoot: dir })
   },
 
-  setApiConfig: (patch) => {
+  setApiConfig: async (patch) => {
     const next: Partial<Pick<UIState, 'apiBaseUrl' | 'apiModel'>> = {}
     if (typeof patch.apiBaseUrl === 'string') {
-      // 端点去空白与尾斜杠，避免拼接出 //chat/completions
       next.apiBaseUrl = patch.apiBaseUrl.trim().replace(/\/+$/, '')
     }
     if (typeof patch.apiModel === 'string') next.apiModel = patch.apiModel.trim()
-    set(next)
-    saveUIDebounced(next)
+    if (next.apiModel !== undefined) {
+      set({ apiModel: next.apiModel })
+      saveUIDebounced({ apiModel: next.apiModel })
+    }
+    if (next.apiBaseUrl !== undefined) {
+      const api = window.electronAPI
+      if (!api) throw new Error('模型服务配置需要在桌面应用中更改')
+      const apiBaseUrl = await api.setApiBaseUrl(next.apiBaseUrl)
+      set({ apiBaseUrl })
+    }
   },
 
   setApiKeyStatus: (status) =>

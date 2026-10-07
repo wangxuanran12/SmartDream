@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join, parse } from 'node:path'
 import test from 'node:test'
-import { FileAuthorization, isWithinPath } from '../src/main/fileAuthorization.ts'
+import { FileAuthorization, isSamePath, isWithinPath } from '../src/main/fileAuthorization.ts'
 
 async function createFixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'smartdream-file-auth-'))
@@ -49,6 +49,16 @@ test('Windows path samples preserve root boundaries independent of the test host
   assert.equal(isWithinPath(root, String.raw`C:\work\project\..\secret.txt`, 'win32'), false)
 })
 
+test('same-path checks reject selecting a different folder or file during reauthorization', () => {
+  const original = String.raw`C:\work\project`
+  assert.equal(isSamePath(original, String.raw`C:\work\project`, 'win32'), true)
+  assert.equal(isSamePath(original, String.raw`C:\work\other`, 'win32'), false)
+  assert.equal(
+    isSamePath(original, String.raw`C:\work\project-copy`, 'win32'),
+    false
+  )
+})
+
 test('a selected file grants reads only for that exact file', async (t) => {
   const fixture = await createFixture(t)
   const file = join(fixture.authorized, 'selected.txt')
@@ -59,6 +69,22 @@ test('a selected file grants reads only for that exact file', async (t) => {
   assert.equal(await fixture.authorization.resolveAuthorizedPath(file, 'read'), await realpath(file))
   await assert.rejects(fixture.authorization.resolveAuthorizedPath(file, 'write'), /未经授权/)
   await assert.rejects(fixture.authorization.resolveAuthorizedPath(sibling, 'read'), /未经授权/)
+})
+
+test('single-file grants are isolated to the task that authorized them', async (t) => {
+  const fixture = await createFixture(t)
+  const file = join(fixture.authorized, 'selected.txt')
+  await writeFile(file, 'selected')
+  await fixture.authorization.authorizeFile(file, 'task-a')
+
+  assert.equal(
+    await fixture.authorization.resolveAuthorizedPath(file, 'read', false, 'task-a'),
+    await realpath(file)
+  )
+  await assert.rejects(
+    fixture.authorization.resolveAuthorizedPath(file, 'read', false, 'task-b'),
+    /未经授权/
+  )
 })
 
 test('a selected directory grants descendants but not similarly prefixed paths', async (t) => {
@@ -74,6 +100,52 @@ test('a selected directory grants descendants but not similarly prefixed paths',
   )
   await assert.rejects(
     fixture.authorization.resolveAuthorizedPath(join(sibling, 'secret.txt'), 'read', true),
+    /未经授权/
+  )
+})
+
+test('application data directories are not implicitly authorized for shell access', async (t) => {
+  const fixture = await createFixture(t)
+  const applicationData = join(fixture.root, 'app-data')
+  await mkdir(applicationData)
+  await writeFile(join(applicationData, 'settings.db'), 'private')
+
+  await assert.rejects(
+    fixture.authorization.resolveAuthorizedPath(
+      join(applicationData, 'settings.db'),
+      'read'
+    ),
+    /未经授权/
+  )
+})
+
+test('directory grants are shared only by tasks using the same space scope', async (t) => {
+  const fixture = await createFixture(t)
+  const selected = join(fixture.root, 'project')
+  await mkdir(selected)
+  const spaceScope = await realpath(selected)
+  await fixture.authorization.authorizeDirectory(selected, spaceScope)
+
+  assert.equal(
+    await fixture.authorization.resolveAuthorizedPath(
+      join(selected, 'src', 'index.ts'),
+      'read',
+      true,
+      spaceScope
+    ),
+    join(await realpath(selected), 'src', 'index.ts')
+  )
+  await assert.rejects(
+    fixture.authorization.resolveAuthorizedPath(
+      join(selected, 'src', 'index.ts'),
+      'read',
+      true,
+      join(fixture.root, 'another-space')
+    ),
+    /未经授权/
+  )
+  await assert.rejects(
+    fixture.authorization.resolveAuthorizedPath(join(selected, 'src', 'index.ts'), 'read', true),
     /未经授权/
   )
 })

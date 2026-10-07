@@ -6,18 +6,24 @@ import { IPC, type ElectronAPI, type ChatStreamPayload, type ChatStreamResult } 
 const api: ElectronAPI = {
   getAppInfo: () => ipcRenderer.invoke(IPC.getAppInfo),
   getStorageInfo: () => ipcRenderer.invoke(IPC.getStorageInfo),
-  readDirectory: (dirPath) => ipcRenderer.invoke(IPC.readDirectory, dirPath),
-  readFile: (filePath) => ipcRenderer.invoke(IPC.readFile, filePath),
-  readFileAsDataUrl: (filePath) => ipcRenderer.invoke(IPC.readFileAsDataUrl, filePath),
-  writeFile: (filePath, content) => ipcRenderer.invoke(IPC.writeFile, filePath, content),
-  createFile: (filePath) => ipcRenderer.invoke(IPC.createFile, filePath),
-  getWorkspace: () => ipcRenderer.invoke(IPC.getWorkspace),
-  selectAndAuthorizeDirectory: () => ipcRenderer.invoke(IPC.selectAndAuthorizeDirectory),
-  selectAndAuthorizeFile: () => ipcRenderer.invoke(IPC.selectAndAuthorizeFile),
+  openDataDirectory: () => ipcRenderer.invoke(IPC.openDataDirectory),
+  readDirectory: (dirPath, scopeId) =>
+    ipcRenderer.invoke(IPC.readDirectory, dirPath, scopeId),
+  readFile: (filePath, scopeId) => ipcRenderer.invoke(IPC.readFile, filePath, scopeId),
+  readFileAsDataUrl: (filePath, scopeId) =>
+    ipcRenderer.invoke(IPC.readFileAsDataUrl, filePath, scopeId),
+  getWorkspace: (scopeId) => ipcRenderer.invoke(IPC.getWorkspace, scopeId),
+  selectAndAuthorizeDirectory: (sessionId) =>
+    ipcRenderer.invoke(IPC.selectAndAuthorizeDirectory, sessionId),
+  selectAndAuthorizeFile: (sessionId) =>
+    ipcRenderer.invoke(IPC.selectAndAuthorizeFile, sessionId),
+  reauthorizeDirectory: (sessionId, path) =>
+    ipcRenderer.invoke(IPC.reauthorizeDirectory, sessionId, path),
+  reauthorizeFile: (sessionId, path) => ipcRenderer.invoke(IPC.reauthorizeFile, sessionId, path),
   selectWorkspaceRoot: () => ipcRenderer.invoke(IPC.selectWorkspaceRoot),
   createSpace: (name) => ipcRenderer.invoke(IPC.createSpace, name),
-  openPath: (path) => ipcRenderer.invoke(IPC.openPath, path),
-  showInFolder: (path) => ipcRenderer.invoke(IPC.showInFolder, path),
+  openPath: (path, scopeId) => ipcRenderer.invoke(IPC.openPath, path, scopeId),
+  showInFolder: (path, scopeId) => ipcRenderer.invoke(IPC.showInFolder, path, scopeId),
   windowMinimize: () => ipcRenderer.send(IPC.windowMinimize),
   windowMaximize: () => ipcRenderer.send(IPC.windowMaximize),
   windowClose: () => ipcRenderer.send(IPC.windowClose),
@@ -42,6 +48,7 @@ const api: ElectronAPI = {
   getApiKeyStatus: () => ipcRenderer.invoke(IPC.apiKeyStatus),
   setApiKey: (value) => ipcRenderer.invoke(IPC.apiKeySet, value),
   clearApiKey: () => ipcRenderer.invoke(IPC.apiKeyClear),
+  setApiBaseUrl: (baseUrl) => ipcRenderer.invoke(IPC.apiBaseUrlSet, baseUrl),
   // 流式聊天：先同步订阅 chunk 事件（按 requestId 过滤）再 invoke，settle 后移除监听
   chatStream: (payload: ChatStreamPayload, onChunk: (delta: string) => void) => {
     const listener = (_e: IpcRendererEvent, reqId: string, delta: string): void => {

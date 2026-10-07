@@ -2,7 +2,7 @@ import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join } from 'path'
 import type { Dirent } from 'node:fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
-import { readdir, stat, writeFile, mkdir, statfs } from 'fs/promises'
+import { readdir, stat, mkdir, statfs } from 'fs/promises'
 import { mkdirSync } from 'node:fs'
 import { basename, extname, join as pathJoin, resolve, dirname as dirnameOf } from 'path'
 import {
@@ -11,10 +11,17 @@ import {
   type ChatStreamPayload
 } from '../shared/types'
 import { MAX_CHAT_ATTACHMENT_BYTES, MAX_CHAT_ATTACHMENTS_TOTAL_BYTES } from '../shared/chatLimits'
-import { initDb, closeDb, registerDbHandlers } from './db'
+import {
+  initDb,
+  closeDb,
+  getAllSessions,
+  getSettings,
+  registerDbHandlers,
+  upsertApiBaseUrl
+} from './db'
 import { runChatStream, abortChat } from './llm'
 import { seedProjectDocs, PROJECT_DOCS_DIRNAME } from './spaceDocs'
-import { FileAuthorization, canonicalizePath, isWithinPath } from './fileAuthorization'
+import { FileAuthorization, canonicalizePath, isSamePath, isWithinPath } from './fileAuthorization'
 import { buildFileTree } from './fileTree'
 import { resolveChatAttachments } from './chatAttachments'
 import { readFileBounded } from './fileIO'
@@ -25,11 +32,18 @@ import {
   initializeApiCredential,
   setApiKey
 } from './credentials'
+import { createApiConfigService } from './apiConfigService'
 import { normalizeApiBaseUrl } from './apiConfig'
+import { DEFAULT_API_BASE_URL } from '../shared/modelDefaults'
 import { migrateLegacyDataDirectory } from './dataDirectory'
 
 // E2E/自动化测试：显式覆盖应用数据目录；设置后不执行旧目录迁移
-const dataDirOverride = process.env.WORKBUDDY_DATA_DIR
+const dataDirOverride =
+  process.env.SMARTDREAM_DATA_DIR ?? process.env.WORKBUDDY_DATA_DIR
+const allowLocalLlmHttp =
+  is.dev &&
+  (process.env.SMARTDREAM_ALLOW_LOCAL_LLM_HTTP === '1' ||
+    process.env.WORKBUDDY_ALLOW_LOCAL_LLM_HTTP === '1')
 const legacyInstallDir = app.isPackaged
   ? process.platform === 'darwin'
     ? resolve(app.getPath('exe'), '..', '..', '..', '..')
@@ -83,7 +97,7 @@ function safeFileReadReason(err: unknown): string {
       : undefined
   if (
     errorMessage &&
-    /^(拒绝访问|目标不是|文件过大|无效的文件系统路径)/.test(errorMessage)
+    /^(拒绝访问|目标不是|文件过大|无效的文件系统路径|任务信息无效)/.test(errorMessage)
   ) {
     return errorMessage
   }
@@ -112,6 +126,31 @@ const MAX_IPC_FILE_BYTES = 10 * 1024 * 1024
 let sandboxDir = ''
 const fileAuthorization = new FileAuthorization()
 let workspaceRoot = ''
+let apiConfigService: ReturnType<typeof createApiConfigService> | null = null
+
+function createTrustedApiConfig(initialBaseUrl: string): ReturnType<typeof createApiConfigService> {
+  return createApiConfigService(initialBaseUrl, {
+    normalizeBaseUrl: (value) => normalizeApiBaseUrl(value, allowLocalLlmHttp),
+    persistBaseUrl: upsertApiBaseUrl,
+    confirmBaseUrlChange: async (_current, next) => {
+      const options: Electron.MessageBoxOptions = {
+        type: 'warning',
+        title: '确认更换模型服务',
+        message: '后续模型请求中的 API Key 将发送到以下服务：',
+        detail: next,
+        buttons: ['确认更换', '取消'],
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true
+      }
+      const win = BrowserWindow.getFocusedWindow()
+      const confirmation = win
+        ? await dialog.showMessageBox(win, options)
+        : await dialog.showMessageBox(options)
+      return confirmation.response === 0
+    }
+  })
+}
 
 /** 确保沙箱工作区目录存在 */
 async function ensureSandboxDir(): Promise<void> {
@@ -119,11 +158,11 @@ async function ensureSandboxDir(): Promise<void> {
 }
 
 /** 返回当前授权状态 */
-function currentWorkspace(): WorkspaceInfo {
+function currentWorkspace(scopeId?: string): WorkspaceInfo {
   return {
     sandboxDir,
-    authorizedDirs: fileAuthorization.getAuthorizedDirs(),
-    authorizedFiles: fileAuthorization.getAuthorizedFiles()
+    authorizedDirs: fileAuthorization.getAuthorizedDirs(scopeId),
+    authorizedFiles: fileAuthorization.getAuthorizedFiles(scopeId)
   }
 }
 
@@ -216,10 +255,13 @@ function registerIpcHandlers(): void {
   })
 
   // 查询授权状态与沙箱目录
-  ipcMain.handle(IPC.getWorkspace, async () => {
+  ipcMain.handle(IPC.getWorkspace, async (_event, scopeId?: unknown) => {
+    if (scopeId !== undefined && (typeof scopeId !== 'string' || !scopeId)) {
+      throw new Error('任务信息无效')
+    }
     if (!sandboxDir) sandboxDir = join(app.getPath('userData'), 'workspace')
     await ensureSandboxDir()
-    return currentWorkspace()
+    return currentWorkspace(scopeId)
   })
 
   // 应用存储信息（设置弹窗「存储」区）：缓存目录占用（递归统计）+ 所在磁盘容量
@@ -260,27 +302,83 @@ function registerIpcHandlers(): void {
     }
   })
 
+  ipcMain.handle(IPC.openDataDirectory, async () => {
+    const dataDir = await canonicalizePath(app.getPath('userData'))
+    const err = await shell.openPath(dataDir)
+    if (err) throw new Error(`无法打开应用数据目录: ${err}`)
+  })
+
   const choosePath = async (
     event: Electron.IpcMainInvokeEvent,
-    properties: Array<'openDirectory' | 'openFile'>
+    properties: Array<'openDirectory' | 'openFile'>,
+    defaultPath?: string
   ): Promise<string | undefined> => {
     const win = BrowserWindow.fromWebContents(event.sender)
-    const options: Electron.OpenDialogOptions = { properties }
+    const options: Electron.OpenDialogOptions = {
+      properties,
+      ...(defaultPath ? { defaultPath } : {})
+    }
     const result = win
       ? await dialog.showOpenDialog(win, options)
       : await dialog.showOpenDialog(options)
     return result.canceled ? undefined : result.filePaths[0]
   }
 
-  ipcMain.handle(IPC.selectAndAuthorizeDirectory, async (event) => {
+  ipcMain.handle(IPC.selectAndAuthorizeDirectory, async (event, sessionId: unknown) => {
+    if (typeof sessionId !== 'string' || !sessionId) throw new Error('任务信息无效')
     const selected = await choosePath(event, ['openDirectory'])
-    return selected ? fileAuthorization.authorizeDirectory(selected) : undefined
+    if (!selected) return undefined
+    const canonical = await canonicalizePath(selected)
+    return fileAuthorization.authorizeDirectory(canonical, canonical)
   })
 
-  ipcMain.handle(IPC.selectAndAuthorizeFile, async (event) => {
+  ipcMain.handle(IPC.selectAndAuthorizeFile, async (event, sessionId: unknown) => {
+    if (typeof sessionId !== 'string' || !sessionId) throw new Error('任务信息无效')
     const selected = await choosePath(event, ['openFile'])
-    return selected ? fileAuthorization.authorizeFile(selected) : undefined
+    return selected ? fileAuthorization.authorizeFile(selected, sessionId) : undefined
   })
+
+  ipcMain.handle(
+    IPC.reauthorizeDirectory,
+    async (event, sessionId: unknown, expectedPath: unknown) => {
+      if (typeof sessionId !== 'string' || !sessionId) {
+        throw new Error('重新授权失败：任务信息无效')
+      }
+      const expected = await canonicalizePath(expectedPath)
+      const session = getAllSessions().find((entry) => entry.id === sessionId)
+      if (!session?.workspace || !isSamePath(session.workspace, expected)) {
+        throw new Error('重新授权失败：该任务没有此文件夹的历史记录')
+      }
+      const selected = await choosePath(event, ['openDirectory'], expected)
+      if (!selected) return undefined
+      const canonicalSelected = await canonicalizePath(selected)
+      if (!isSamePath(canonicalSelected, expected)) {
+        throw new Error('重新授权失败：必须选择原文件夹，不能替换为其他文件夹')
+      }
+      return fileAuthorization.authorizeDirectory(canonicalSelected, expected)
+    }
+  )
+
+  ipcMain.handle(
+    IPC.reauthorizeFile,
+    async (event, sessionId: unknown, expectedPath: unknown) => {
+      if (typeof sessionId !== 'string' || !sessionId) {
+        throw new Error('重新授权失败：任务信息无效')
+      }
+      const expected = await canonicalizePath(expectedPath)
+      const session = getAllSessions().find((entry) => entry.id === sessionId)
+      if (!session?.authorizedFile || !isSamePath(session.authorizedFile, expected)) {
+        throw new Error('重新授权失败：该任务没有此文件的历史记录')
+      }
+      const selected = await choosePath(event, ['openFile'], expected)
+      if (!selected) return undefined
+      const canonicalSelected = await canonicalizePath(selected)
+      if (!isSamePath(canonicalSelected, expected)) {
+        throw new Error('重新授权失败：必须选择原文件，不能替换为其他文件')
+      }
+      return fileAuthorization.authorizeFile(canonicalSelected, sessionId)
+    }
+  )
 
   ipcMain.handle(IPC.selectWorkspaceRoot, async (event) => {
     const selected = await choosePath(event, ['openDirectory'])
@@ -317,16 +415,32 @@ function registerIpcHandlers(): void {
     return canonicalDir
   })
 
-  // 读取目录：仅允许已授权工作空间或沙箱工作区
-  ipcMain.handle(IPC.readDirectory, async (_e, dirPath: unknown) => {
-    const canonical = await fileAuthorization.resolveAuthorizedPath(dirPath, 'read')
+  // 读取目录：仅允许沙箱、全局管理根目录或指定空间范围内已授权的目录。
+  ipcMain.handle(IPC.readDirectory, async (_e, dirPath: unknown, scopeId?: unknown) => {
+    if (scopeId !== undefined && (typeof scopeId !== 'string' || !scopeId)) {
+      throw new Error('任务信息无效')
+    }
+    const canonical = await fileAuthorization.resolveAuthorizedPath(
+      dirPath,
+      'read',
+      false,
+      scopeId
+    )
     if (!(await stat(canonical)).isDirectory()) throw new Error('所选路径不是目录')
     return buildFileTree(canonical)
   })
 
-  ipcMain.handle(IPC.readFile, async (_e, filePath: unknown) => {
+  ipcMain.handle(IPC.readFile, async (_e, filePath: unknown, scopeId?: unknown) => {
     try {
-      const canonical = await fileAuthorization.resolveAuthorizedPath(filePath, 'read')
+      if (scopeId !== undefined && (typeof scopeId !== 'string' || !scopeId)) {
+        throw new Error('任务信息无效')
+      }
+      const canonical = await fileAuthorization.resolveAuthorizedPath(
+        filePath,
+        'read',
+        false,
+        scopeId
+      )
       const info = await stat(canonical)
       if (!info.isFile()) throw new Error('目标不是普通文件')
       if (info.size > MAX_IPC_FILE_BYTES) throw new Error('文件过大，无法通过预览读取')
@@ -344,9 +458,17 @@ function registerIpcHandlers(): void {
   })
 
   // 读取文件为 data URL（用于图片等二进制预览），仅限已授权路径
-  ipcMain.handle(IPC.readFileAsDataUrl, async (_e, filePath: unknown) => {
+  ipcMain.handle(IPC.readFileAsDataUrl, async (_e, filePath: unknown, scopeId?: unknown) => {
     try {
-      const canonical = await fileAuthorization.resolveAuthorizedPath(filePath, 'read')
+      if (scopeId !== undefined && (typeof scopeId !== 'string' || !scopeId)) {
+        throw new Error('任务信息无效')
+      }
+      const canonical = await fileAuthorization.resolveAuthorizedPath(
+        filePath,
+        'read',
+        false,
+        scopeId
+      )
       const info = await stat(canonical)
       if (!info.isFile()) throw new Error('目标不是普通文件')
       if (info.size > MAX_IPC_FILE_BYTES) throw new Error('文件过大，无法通过预览读取')
@@ -361,50 +483,12 @@ function registerIpcHandlers(): void {
     }
   })
 
-  // 写入文件：仅允许已授权工作空间或沙箱工作区
-  ipcMain.handle(IPC.writeFile, async (_e, filePath: unknown, content: unknown) => {
-    if (typeof content !== 'string') throw new Error('文件内容格式无效')
-    if (Buffer.byteLength(content, 'utf8') > MAX_IPC_FILE_BYTES) {
-      throw new Error('文件内容过大，无法写入')
+  ipcMain.handle(IPC.openPath, async (_e, path: unknown, sessionId?: unknown) => {
+    if (sessionId !== undefined && (typeof sessionId !== 'string' || !sessionId)) {
+      throw new Error('任务信息无效')
     }
-    try {
-      const canonical = await fileAuthorization.resolveAuthorizedPath(filePath, 'write', true)
-      await writeFile(canonical, content, 'utf-8')
-      return { path: canonical, ok: true }
-    } catch (err) {
-      throw new Error(
-        `无法写入文件: ${typeof filePath === 'string' ? basename(filePath) : '无效路径'} - ${(err as Error).message}`
-      )
-    }
-  })
-
-  // 创建新文件（空文件）：仅允许沙箱工作区或已授权工作空间
-  ipcMain.handle(IPC.createFile, async (_e, filePath: unknown) => {
-    const canonical = await fileAuthorization.resolveAuthorizedPath(filePath, 'write', true)
-    try {
-      // 确保父目录存在
-      await mkdir(dirnameOf(canonical), { recursive: true })
-      const verified = await fileAuthorization.resolveAuthorizedPath(canonical, 'write', true)
-      // 文件不存在才创建，避免覆盖已有内容
-      await writeFile(verified, '', { flag: 'wx' })
-      return { path: verified, ok: true }
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
-        const existing = await fileAuthorization.resolveAuthorizedPath(canonical, 'write')
-        if (!(await stat(existing)).isFile()) throw new Error('目标不是普通文件')
-        return { path: existing, ok: true }
-      }
-      throw new Error(`无法创建文件: ${basename(canonical)} - ${(err as Error).message}`)
-    }
-  })
-
-  ipcMain.handle(IPC.openPath, async (_e, path: unknown) => {
     const canonical = await canonicalizePath(path)
-    const dataDir = await canonicalizePath(app.getPath('userData'))
-    if (
-      !fileAuthorization.isAuthorizedCanonicalPath(canonical, 'read') &&
-      !isWithinPath(dataDir, canonical)
-    ) {
+    if (!fileAuthorization.isAuthorizedCanonicalPath(canonical, 'read', sessionId)) {
       throw new Error('拒绝打开：该路径未经授权')
     }
     // shell.openPath 以返回值报错（空串成功），转成 rejection 供渲染层捕获
@@ -412,13 +496,12 @@ function registerIpcHandlers(): void {
     if (err) throw new Error(`无法打开: ${err}`)
   })
 
-  ipcMain.handle(IPC.showInFolder, async (_e, path: unknown) => {
+  ipcMain.handle(IPC.showInFolder, async (_e, path: unknown, sessionId?: unknown) => {
+    if (sessionId !== undefined && (typeof sessionId !== 'string' || !sessionId)) {
+      throw new Error('任务信息无效')
+    }
     const canonical = await canonicalizePath(path)
-    const dataDir = await canonicalizePath(app.getPath('userData'))
-    if (
-      !fileAuthorization.isAuthorizedCanonicalPath(canonical, 'read') &&
-      !isWithinPath(dataDir, canonical)
-    ) {
+    if (!fileAuthorization.isAuthorizedCanonicalPath(canonical, 'read', sessionId)) {
       throw new Error('拒绝显示：该路径未经授权')
     }
     shell.showItemInFolder(canonical)
@@ -445,6 +528,10 @@ function registerIpcHandlers(): void {
     if (
       !payload ||
       typeof payload.requestId !== 'string' ||
+      typeof payload.sessionId !== 'string' ||
+      !payload.sessionId ||
+      typeof payload.authorizationScope !== 'string' ||
+      !payload.authorizationScope ||
       !Array.isArray(payload.messages) ||
       !payload.messages.length ||
       payload.messages.some(
@@ -453,26 +540,18 @@ function registerIpcHandlers(): void {
           !['system', 'user', 'assistant'].includes(message.role) ||
           typeof message.content !== 'string'
       ) ||
-      typeof payload.model !== 'string' ||
-      typeof payload.baseUrl !== 'string'
+      typeof payload.model !== 'string'
     ) {
       return { ok: false, error: '聊天请求参数无效' }
     }
     const apiKey = getApiKey()
     if (!apiKey) return { ok: false, error: '尚未配置 API Key' }
-    let baseUrl: string
-    try {
-      baseUrl = normalizeApiBaseUrl(
-        payload.baseUrl,
-        is.dev && process.env.WORKBUDDY_ALLOW_LOCAL_LLM_HTTP === '1'
-      )
-    } catch (err) {
-      return { ok: false, error: (err as Error).message }
-    }
+    if (!apiConfigService) return { ok: false, error: '模型服务配置尚未就绪' }
 
     const attachments = await resolveChatAttachments(
       payload.messages,
-      (path) => fileAuthorization.resolveAuthorizedPath(path, 'read'),
+      (path) =>
+        fileAuthorization.resolveAuthorizedPath(path, 'read', false, payload.authorizationScope),
       langFromPath,
       {
         maxFileBytes: MAX_CHAT_ATTACHMENT_BYTES,
@@ -484,7 +563,11 @@ function registerIpcHandlers(): void {
 
     const sender = e.sender
     return runChatStream({
-      payload: { ...payload, baseUrl, messages: attachments.messages },
+      payload: {
+        ...payload,
+        baseUrl: apiConfigService.getBaseUrl(),
+        messages: attachments.messages
+      },
       apiKey,
       onChunk: (delta) => {
         if (!sender.isDestroyed()) sender.send(IPC.chatOnChunk, payload.requestId, delta)
@@ -498,6 +581,10 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC.apiKeyStatus, () => getApiKeyStatus())
   ipcMain.handle(IPC.apiKeySet, (_e, value: unknown) => setApiKey(value))
   ipcMain.handle(IPC.apiKeyClear, () => clearApiKey())
+  ipcMain.handle(IPC.apiBaseUrlSet, async (_event, value: unknown) => {
+    if (!apiConfigService) throw new Error('模型服务配置尚未就绪')
+    return apiConfigService.setBaseUrl(value)
+  })
 }
 
 app.whenReady().then(async () => {
@@ -560,8 +647,38 @@ app.whenReady().then(async () => {
   await mkdir(sandboxDir, { recursive: true })
   sandboxDir = await fileAuthorization.initializeSandbox(sandboxDir, app.getPath('userData'))
   workspaceRoot = sandboxDir
-  initDb()
+  const dbReady = initDb()
   initializeApiCredential()
+  const configuredBaseUrl = getSettings().apiBaseUrl
+  try {
+    apiConfigService = createTrustedApiConfig(
+      typeof configuredBaseUrl === 'string' && configuredBaseUrl
+        ? configuredBaseUrl
+        : DEFAULT_API_BASE_URL
+    )
+  } catch (error) {
+    console.error('[SmartDream] 已保存的模型服务地址无效，恢复默认地址:', error)
+    await dialog.showMessageBox({
+      type: 'warning',
+      title: '模型服务地址无效',
+      message: '已恢复到默认模型服务地址。',
+      detail: String(error)
+    })
+    apiConfigService = createTrustedApiConfig(DEFAULT_API_BASE_URL)
+    if (dbReady) {
+      try {
+        upsertApiBaseUrl(DEFAULT_API_BASE_URL)
+      } catch (persistError) {
+        console.error('[SmartDream] 无法保存默认模型服务地址:', persistError)
+        await dialog.showMessageBox({
+          type: 'error',
+          title: '模型服务配置未保存',
+          message: '已在本次运行中恢复默认模型服务，但无法保存到本地数据库。',
+          detail: String(persistError)
+        })
+      }
+    }
+  }
   registerDbHandlers()
 
   registerIpcHandlers()

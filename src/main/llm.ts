@@ -1,4 +1,8 @@
-import type { ChatMessage, ChatStreamPayload, ChatStreamResult } from '../shared/types'
+import type {
+  ChatMessage,
+  ModelChatStreamPayload,
+  ChatStreamResult
+} from '../shared/types'
 
 const FIRST_CHUNK_TIMEOUT = 30_000
 const IDLE_TIMEOUT = 30_000
@@ -9,7 +13,7 @@ export function abortChat(requestId: string): void {
 }
 
 interface RunChatStreamArgs {
-  payload: ChatStreamPayload
+  payload: ModelChatStreamPayload
   apiKey: string
   onChunk: (delta: string) => void
   timeoutMs?: number

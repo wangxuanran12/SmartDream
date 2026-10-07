@@ -1,15 +1,17 @@
-import { readdir, stat } from 'fs/promises'
+import { opendir, stat } from 'fs/promises'
 import type { Dirent } from 'node:fs'
 import { basename, extname, join } from 'path'
 import type { DirectoryReadResult, FileNode } from '../shared/types'
 
 export const MAX_DIRECTORY_ENTRIES = 5000
+const MAX_DIRECTORY_ENTRIES_INSPECTED = 10_000
 
 const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', 'out', 'release', '.idea', '.vscode'])
 const IGNORE_FILES = new Set(['.DS_Store', 'Thumbs.db'])
 
 interface DirectoryScan {
   count: number
+  inspected: number
   truncated: boolean
 }
 
@@ -23,9 +25,25 @@ async function scanDirectory(
     return []
   }
 
-  let entries: Dirent[]
+  const entries: Dirent[] = []
   try {
-    entries = await readdir(dirPath, { withFileTypes: true })
+    const directory = await opendir(dirPath)
+    for await (const entry of directory) {
+      scan.inspected++
+      if (scan.inspected > MAX_DIRECTORY_ENTRIES_INSPECTED) {
+        scan.truncated = true
+        break
+      }
+      if (entry.name.startsWith('.') || entry.isSymbolicLink()) continue
+      if (!entry.isDirectory() && !entry.isFile()) continue
+      if (entry.isDirectory() && IGNORE_DIRS.has(entry.name)) continue
+      if (!entry.isDirectory() && IGNORE_FILES.has(entry.name)) continue
+      if (scan.count + entries.length >= MAX_DIRECTORY_ENTRIES) {
+        scan.truncated = true
+        break
+      }
+      entries.push(entry)
+    }
   } catch (err) {
     const code =
       typeof err === 'object' && err !== null && 'code' in err && typeof err.code === 'string'
@@ -47,10 +65,6 @@ async function scanDirectory(
 
   const nodes: FileNode[] = []
   for (const entry of entries) {
-    if (entry.name.startsWith('.') || entry.isSymbolicLink()) continue
-    if (!entry.isDirectory() && !entry.isFile()) continue
-    if (entry.isDirectory() && IGNORE_DIRS.has(entry.name)) continue
-    if (!entry.isDirectory() && IGNORE_FILES.has(entry.name)) continue
     if (scan.count >= MAX_DIRECTORY_ENTRIES) {
       scan.truncated = true
       break
@@ -87,7 +101,7 @@ async function scanDirectory(
 }
 
 export async function buildFileTree(dirPath: string): Promise<DirectoryReadResult> {
-  const scan: DirectoryScan = { count: 0, truncated: false }
+  const scan: DirectoryScan = { count: 0, inspected: 0, truncated: false }
   const entries = await scanDirectory(dirPath, scan, 0)
   return { entries, truncated: scan.truncated }
 }

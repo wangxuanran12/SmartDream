@@ -90,6 +90,7 @@ const FEATURE_DOC = `# SmartDream 项目功能说明
 ### 6. 模型服务
 
 - 真实调用：主进程转发 OpenAI 兼容 /chat/completions 流式接口，默认 GLM（glm-4.6）；API Key / 接口地址 / 模型名在设置弹窗「模型服务」卡片配置；
+- 服务地址由主进程从受控设置读取；renderer 的聊天请求不携带地址。更改服务地址时由主进程弹出系统确认框，只有确认并成功持久化后才切换；
 - 会话模型选择随请求发送；选择 GLM 时使用设置中的模型 ID，其他选择将对应选择值作为模型 ID 发送；
 - Mock 兜底：未配置 Key 或模型请求失败时，按用户输入生成演示回复并注明失败原因；演示回复不代表文件读取、修改或测试已执行；
 - 输入框工具行内联模型选择器，按任务生效并在底部展示当前模型。实际可用的模型由配置的兼容 API 服务决定。
@@ -147,11 +148,11 @@ const FEATURE_DOC = `# SmartDream 项目功能说明
 
 ### 16. 国际化
 
-- 全部 UI 文案走统一词典（约 190 键），简体中文 / English 双语随设置实时切换；品牌词（SmartDream / Plan / Ask / GLM 等）与示例对话正文不翻译。
+- 全部 UI 文案走统一词典，简体中文 / English 双语随设置实时切换；品牌词（SmartDream / Plan / Ask / GLM 等）与示例对话正文不翻译。
 
 ### 17. 本地数据目录与迁移
 
-- 普通运行使用当前用户系统应用数据目录下的 \`SmartDream/\`，不写入安装目录；\`WORKBUDDY_DATA_DIR\` 是显式测试覆盖项，不是便携模式；
+- 普通运行使用当前用户系统应用数据目录下的 \`SmartDream/\`，不写入安装目录；\`SMARTDREAM_DATA_DIR\` 是显式测试覆盖项，\`WORKBUDDY_DATA_DIR\` 暂作为兼容别名，不是便携模式；
 - 从旧版升级时，首次启动会将安装目录旁旧 \`SmartDream/\` 中缺失的文件复制到新位置，保留原目录且不覆盖已有文件；冲突会提示，复制失败会阻止启动；
 - 新目录数据库副本中的旧版明文 API Key 会尝试迁移到系统安全存储；安全存储不可用时从新副本删除并提示重新录入。旧目录保留原样，可能仍含明文 Key；确认新数据和密钥状态后需用户手动删除旧目录。
 `
@@ -197,7 +198,7 @@ src/
 │   ├── store/       # useStore.ts：Zustand 会话态 + UI 态 + 用户档案 + runAssistant 对话链路
 │   ├── lib/         # diff.ts（有规模上限的 LCS 工具；Markdown diff 块当前按原文显示）、persistence.ts（IPC 持久化与种子播种）
 │   ├── data/        # mockData.ts：示例对话、斜杠命令、动态 Mock 回复生成
-│   ├── i18n.ts      # 唯一词典（扁平驼峰键，zh / en 双语约 190 键）
+│   ├── i18n.ts      # 唯一词典（扁平驼峰键，zh / en 双语）
 │   ├── App.tsx      # 三栏布局组装、全局拖拽、快捷键
 │   └── assets/      # 吉祥物插画（SVG）
 └── shared/
@@ -208,23 +209,24 @@ src/
 
 | 分组 | 通道 |
 |---|---|
-| 应用信息 | app:get-info、app:get-storage |
+| 应用信息 | app:get-info、app:get-storage、app:open-data-directory |
 | 文件系统 | fs:read-directory、fs:read-file、fs:read-file-data-url、fs:write-file、fs:create-file |
 | 工作空间 | fs:get-workspace、dialog:select-authorized-directory、dialog:select-authorized-file、dialog:select-workspace-root、space:create |
 | Shell | shell:open-path、shell:show-in-folder |
 | 窗口控制 | window:minimize / maximize / close / is-maximized、window:on-maximize-change |
 | 持久化 | db:load、db:session-upsert、db:session-delete、db:message-upsert、db:messages-replace、db:settings-upsert、db:user-upsert |
+| 模型服务 | model-config:set-base-url、credentials:status / set / clear |
 | 聊天流 | chat:send、chat:on-chunk、chat:abort |
 
 - 渲染层对所有可选 IPC 方法先做 typeof 函数防御再调用，避免新旧 preload 构建不一致导致整树崩溃；
-- renderer 没有 Node.js 文件系统接口；主进程对每次文件 IPC 独立检查真实路径、访问模式和当前运行授权。renderer 可调用 preload API，因此安全保证来自主进程校验，而非 UI 隐藏或禁用；
+- renderer 没有 Node.js 文件系统接口；主进程对每次文件 IPC 独立检查真实路径、访问模式和当前运行授权。Shell 打开和显示路径也必须属于当前授权范围；打开应用自身的数据目录使用无路径参数的专用 IPC；
 - 文件授权由主进程打开系统选择器并登记；目录授权可读写，单文件授权只读，授权不会从任务记录跨重启恢复；
-- 文件类 IPC 在主进程解析真实路径并用路径相对关系检查授权边界，拒绝符号链接逃逸、相似前缀路径和超出大小上限的文件；空间根目录由主进程管理，IPC 不接受 renderer 传入的父路径。
+- 文件类 IPC 在主进程解析真实路径并用路径相对关系检查授权边界，拒绝符号链接逃逸、相似前缀路径和超出大小上限的文件；空间根目录由主进程管理，IPC 不接受 renderer 传入的父路径。API 基础端点由主进程管理，普通设置 IPC 禁止改写；更换端点需系统确认，聊天 IPC 不接收端点值。
 
 ## 五、数据持久化（SQLite）
 
 - 驱动：Node 内置 node:sqlite（Electron 44 内置 Node 24，同步 API），无需 SQLite 原生 npm 模块；
-- DB 文件：当前用户系统应用数据目录下 \`SmartDream/workbuddy.db\`（macOS 通常为 \`~/Library/Application Support/SmartDream/\`，Windows 通常为 \`%APPDATA%\\SmartDream\\\`）；开发和打包默认使用相同根目录。\`WORKBUDDY_DATA_DIR\` 仅供测试覆盖并跳过迁移；
+- DB 文件：当前用户系统应用数据目录下 \`SmartDream/smartdream.db\`（macOS 通常为 \`~/Library/Application Support/SmartDream/\`，Windows 通常为 \`%APPDATA%\\SmartDream\\\`）；发现旧 \`workbuddy.db\` 时使用 SQLite 快照迁移并保留原文件。\`SMARTDREAM_DATA_DIR\` 仅供测试覆盖并跳过旧安装目录迁移，旧变量 \`WORKBUDDY_DATA_DIR\` 暂作为兼容别名；
 - 首次启动新版时会把旧安装目录旁 \`SmartDream/\` 中缺失的文件复制到新目录；旧目录保留，不覆盖已有文件，冲突会提示，复制失败会停止启动；
 - DB 包含 5 张表：tasks / messages / app_settings（KV）/ secure_credentials / users；
 - 新目录数据库副本中的旧版明文 API Key 会尝试迁移到系统安全存储；安全存储不可用时从新副本删除并提示重新录入。旧目录保留原样，可能仍含明文 Key；确认新数据和密钥状态后需用户手动删除旧目录；
@@ -243,7 +245,7 @@ src/
 ## 七、安全模型
 
 - 渲染进程 sandbox、contextIsolation 开启、nodeIntegration 关闭；主进程仅经 preload contextBridge 暴露白名单 API；
-- 文件 / 目录读写与模型附件读取一律过主进程真实路径白名单校验；附件路径不会转发给模型；文件树最多返回 5000 项，截断状态由 UI 提示；
+- 文件 / 目录读写、模型附件读取和 Shell 路径操作一律过主进程真实路径白名单校验；附件路径不会转发给模型；文件树最多返回 5000 项并限制检查的目录条目总数，截断状态由 UI 提示；
 - API Key 由主进程安全凭据服务持有并转发请求，不返回 renderer，也不作为普通 app_settings 持久化。
 
 ## 八、构建与打包

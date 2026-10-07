@@ -18,6 +18,7 @@ import type { I18nKey } from '../i18n'
 
 /** 搜索类别页签 */
 type SearchTab = 'all' | 'tasks' | 'spaces' | 'artifacts'
+type SearchFile = FileNode & { scopeId?: string }
 const TAB_ORDER: SearchTab[] = ['all', 'tasks', 'spaces', 'artifacts']
 
 /** 「全部」页签下每个分组的最大展示行数（任务组超出出「查看全部」，其余截断） */
@@ -78,10 +79,14 @@ function ArtifactIcon({ ext }: { ext?: string }): JSX.Element {
 }
 
 /** 递归展平文件树为文件列表（按路径去重） */
-function flattenFiles(nodes: FileNode[], out: Map<string, FileNode>): void {
+function flattenFiles(
+  nodes: FileNode[],
+  out: Map<string, SearchFile>,
+  scopeId?: string
+): void {
   for (const nd of nodes) {
-    if (nd.isDirectory) flattenFiles(nd.children ?? [], out)
-    else if (!out.has(nd.path)) out.set(nd.path, nd)
+    if (nd.isDirectory) flattenFiles(nd.children ?? [], out, scopeId)
+    else if (!out.has(nd.path)) out.set(nd.path, { ...nd, scopeId })
   }
 }
 
@@ -98,7 +103,7 @@ export default function SearchModal(): JSX.Element {
 
   const [query, setQuery] = useState('')
   const [tab, setTab] = useState<SearchTab>('all')
-  const [files, setFiles] = useState<FileNode[] | null>(null) // null = 扫描中
+  const [files, setFiles] = useState<SearchFile[] | null>(null) // null = 扫描中
   const [fileScanTruncated, setFileScanTruncated] = useState(false)
   const [selIdx, setSelIdx] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -120,16 +125,18 @@ export default function SearchModal(): JSX.Element {
       setFileScanTruncated(false)
       return
     }
-    const dirs = new Set<string>()
-    if (workspaceRoot) dirs.add(workspaceRoot)
-    for (const s of sessions) if (s.workspace) dirs.add(s.workspace)
+    const dirs = new Map<string, { path: string; scopeId?: string }>()
+    if (workspaceRoot) dirs.set(`global:${workspaceRoot}`, { path: workspaceRoot })
+    for (const s of sessions) {
+      if (s.workspace) dirs.set(s.workspace, { path: s.workspace, scopeId: s.workspace })
+    }
     void (async () => {
-      const map = new Map<string, FileNode>()
+      const map = new Map<string, SearchFile>()
       let truncated = false
-      for (const dir of dirs) {
+      for (const { path, scopeId } of dirs.values()) {
         try {
-          const result = await api.readDirectory(dir)
-          flattenFiles(result.entries, map)
+          const result = await api.readDirectory(path, scopeId)
+          flattenFiles(result.entries, map, scopeId)
           truncated ||= result.truncated
         } catch (error) {
           // 未授权 / 不可读的目录跳过
@@ -214,9 +221,13 @@ export default function SearchModal(): JSX.Element {
   }
 
   /** 产物行打开：系统默认方式打开文件 */
-  const openArtifact = (path: string): void => {
+  const openArtifact = (path: string, scopeId?: string): void => {
     const api = window.electronAPI
-    if (api && typeof api.openPath === 'function') void api.openPath(path).catch(() => {})
+    if (api && typeof api.openPath === 'function') {
+      void api.openPath(path, scopeId).catch((error) => {
+        console.warn('[SmartDream] 无法打开搜索结果:', error)
+      })
+    }
     close()
   }
 
@@ -237,14 +248,14 @@ export default function SearchModal(): JSX.Element {
       for (const sp of spaceHits.slice(0, SECTION_LIMIT))
         list.push({ key: `space-${sp.dir}`, act: () => openSpace(sp.dir) })
       for (const f of artifactHits.slice(0, SECTION_LIMIT))
-        list.push({ key: `file-${f.path}`, act: () => openArtifact(f.path) })
+        list.push({ key: `file-${f.path}`, act: () => openArtifact(f.path, f.scopeId) })
     } else if (tab === 'tasks') {
       for (const s of taskHits) list.push({ key: `task-${s.id}`, act: () => openSession(s.id) })
     } else if (tab === 'spaces') {
       for (const sp of spaceHits) list.push({ key: `space-${sp.dir}`, act: () => openSpace(sp.dir) })
     } else {
       for (const f of artifactHits)
-        list.push({ key: `file-${f.path}`, act: () => openArtifact(f.path) })
+        list.push({ key: `file-${f.path}`, act: () => openArtifact(f.path, f.scopeId) })
     }
     return list
     // action 闭包依赖当次渲染的 sessions 快照，随结果重渲染重建即可
